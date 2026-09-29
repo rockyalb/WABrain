@@ -1,0 +1,13 @@
+{
+  "name": "WABrain",
+  "short_name": "Brain",
+  "description": "Your tasks, people, chats and Ask on desktop.",
+  "start_url": "/#/tasks",
+  "scope": "/",
+  "display": "standalone",
+  "background_color": "#f2fbf6",
+  "theme_color": "#f2fbf6",
+  "icons": [
+    { "src": "/app-icon.png", "sizes": "432x432", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

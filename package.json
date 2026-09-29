@@ -1,0 +1,24 @@
+{
+  "name": "wabrain",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A self-hosted, read-only WhatsApp task intelligence layer.",
+  "license": "FSL-1.1-ALv2",
+  "engines": {
+    "node": ">=22"
+  },
+  "packageManager": "pnpm@10.17.1",
+  "scripts": {
+    "build": "pnpm --filter @wabrain/setup build && pnpm -r --filter '!@wabrain/setup' build",
+    "dev": "concurrently -n api,setup,worker -c yellow,cyan,green \"pnpm --filter @wabrain/api dev\" \"pnpm --filter @wabrain/setup dev\" \"pnpm --filter @wabrain/worker dev\"",
+    "test": "pnpm -r test",
+    "typecheck": "pnpm -r typecheck",
+    "lint": "biome lint apps packages --error-on-warnings"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.5.14",
+    "concurrently": "^9.2.1",
+    "typescript": "^7.0.2",
+    "vitest": "^4.1.11"
+  }
+}

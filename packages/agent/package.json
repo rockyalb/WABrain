@@ -1,0 +1,30 @@
+{
+  "name": "@wabrain/agent",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing/index.ts"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "test": "vitest run src",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "eval": "tsx src/eval/run-eval.ts",
+    "transcribe-eval": "tsx src/eval/transcribe-eval.ts"
+  },
+  "dependencies": {
+    "@ai-sdk/anthropic": "^4.0.60",
+    "@ai-sdk/openai": "^4.0.72",
+    "@ai-sdk/openai-compatible": "^3.0.53",
+    "@wabrain/contracts": "workspace:*",
+    "ai": "^7.0.111",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "vitest": "^4.1.11"
+  }
+}

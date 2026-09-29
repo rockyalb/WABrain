@@ -1,0 +1,14 @@
+# Secret scanning (gitleaks), used by .github/workflows/security.yml.
+# The default rules apply; tests carry deliberately fake keys to prove that
+# real ones never reach responses, logs or the database.
+title = "WABrain gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Fake credentials in tests and build output"
+paths = [
+  '''(^|/)[^/]+\.test\.tsx?$''',
+  '''(^|/)dist/''',
+]

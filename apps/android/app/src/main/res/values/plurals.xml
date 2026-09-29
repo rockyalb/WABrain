@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <plurals name="fact_sources">
+        <item quantity="one">%1$d source</item>
+        <item quantity="other">%1$d sources</item>
+    </plurals>
+    <plurals name="lead_days">
+        <item quantity="one">%1$d day before</item>
+        <item quantity="other">%1$d days before</item>
+    </plurals>
+    <plurals name="lead_hours">
+        <item quantity="one">%1$d hour before</item>
+        <item quantity="other">%1$d hours before</item>
+    </plurals>
+    <plurals name="lead_minutes">
+        <item quantity="one">%1$d minute before</item>
+        <item quantity="other">%1$d minutes before</item>
+    </plurals>
+    <plurals name="notification_review_count">
+        <item quantity="one">%1$d item to review</item>
+        <item quantity="other">%1$d items to review</item>
+    </plurals>
+    <plurals name="review_evidence">
+        <item quantity="one">View %1$d source message</item>
+        <item quantity="other">View %1$d source messages</item>
+    </plurals>
+    <plurals name="settings_trial_value">
+        <item quantity="one">Started %1$s, %2$d day</item>
+        <item quantity="other">Started %1$s, %2$d days</item>
+    </plurals>
+    <plurals name="tasks_open">
+        <item quantity="one">%1$d open</item>
+        <item quantity="other">%1$d open</item>
+    </plurals>
+</resources>

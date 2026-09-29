@@ -1,0 +1,22 @@
+# WABrain
+
+> Self-hosted AI task manager and memory for WhatsApp. WABrain reads WhatsApp chats (read-only) through OpenWA's Baileys engine, turns requests and promises into to-dos, closes them when the chat says they are done, learns people and contexts, and answers questions about chat history with citations. It runs on your own server with Docker Compose and has a native Android app, a home-screen widget, and a web app. It never sends WhatsApp messages. License: FSL-1.1-ALv2 (free to self-host and use internally; commercial resale or hosting requires a partnership with the author; each release becomes Apache 2.0 after two years).
+
+Keywords: WhatsApp productivity, WhatsApp to-do list, WhatsApp task manager, WhatsApp AI assistant, WhatsApp CRM memory, self-hosted, Baileys, OpenWA, voice note transcription, chat search, Android widget.
+
+## Docs
+
+- [README](https://github.com/rockyalb/WABrain/blob/main/README.md): features, quick start, license
+- [Deployment guide](https://github.com/rockyalb/WABrain/blob/main/docs/DEPLOY.md): Docker Compose including OpenWA (set up first), and Railway
+- [OpenWA setup](https://github.com/rockyalb/WABrain/blob/main/docs/OPENWA_SETUP.md): Baileys engine, read-only key, webhook, pairing
+- [Operations](https://github.com/rockyalb/WABrain/blob/main/docs/OPERATIONS.md): backups, upgrades, uninstall, WhatsApp account risk
+- [Product spec](https://github.com/rockyalb/WABrain/blob/main/docs/SPEC.md): how tasks, Review, people, contexts, and Ask behave
+- [Architecture](https://github.com/rockyalb/WABrain/blob/main/docs/ARCHITECTURE.md): services, pipeline, data model
+- [HTTP API](https://github.com/rockyalb/WABrain/blob/main/docs/API.md): endpoints used by the apps
+
+## Optional
+
+- [Security model](https://github.com/rockyalb/WABrain/blob/main/docs/SECURITY.md)
+- [AGENTS.md](https://github.com/rockyalb/WABrain/blob/main/AGENTS.md): repository guide for coding agents
+- [License](https://github.com/rockyalb/WABrain/blob/main/LICENSE.md)
+- [Contact for commercial use and partnerships](https://github.com/rockyalb)

@@ -1,0 +1,31 @@
+{
+  "name": "@wabrain/worker",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./runtime": "./src/runtime.ts"
+  },
+  "scripts": {
+    "dev": "tsx watch --env-file=../../.env src/index.ts",
+    "start": "tsx src/index.ts",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "ops": "tsx src/operations.ts"
+  },
+  "dependencies": {
+    "@wabrain/contracts": "workspace:*",
+    "@wabrain/db": "workspace:*",
+    "@wabrain/jobs": "workspace:*",
+    "zod": "^4.1.11",
+    "@wabrain/notify": "workspace:*",
+    "@wabrain/rules": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsx": "^4.20.6",
+    "vitest": "^4.1.11",
+    "@wabrain/agent": "workspace:*",
+    "drizzle-orm": "^0.45.3"
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "name": "@wabrain/notify",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@wabrain/contracts": "workspace:*",
+    "@wabrain/db": "workspace:*",
+    "web-push": "^3.6.7"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "@types/web-push": "^3.6.4",
+    "vitest": "^4.1.11"
+  }
+}

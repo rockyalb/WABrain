@@ -1,0 +1,79 @@
+name: Node CI
+
+on:
+  workflow_call:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: node-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    name: Typecheck, lint, build, test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    services:
+      postgres:
+        image: pgvector/pgvector:pg17
+        env:
+          POSTGRES_PASSWORD: test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # Each test file creates and drops its own database on this server.
+      DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+      TEST_DATABASE_URL: postgres://postgres:test@localhost:5432/postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Refuse iCloud conflict copies
+        run: |
+          if git ls-files | grep -E ' [0-9]+(\.[^/]*)?$'; then
+            echo "::error::Conflict copies (\"name 2.ext\") are tracked; delete them."
+            exit 1
+          fi
+
+      - uses: pnpm/action-setup@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - run: pnpm install --frozen-lockfile
+
+      - run: pnpm typecheck
+
+      - run: pnpm lint
+
+      - name: Migrations match the schema
+        run: |
+          pnpm --filter @wabrain/db exec drizzle-kit generate
+          if [ -n "$(git status --porcelain -- packages/db/drizzle)" ]; then
+            git status --short -- packages/db/drizzle
+            echo "::error::packages/db/src/schema.ts changed without a migration; run pnpm --filter @wabrain/db db:generate."
+            exit 1
+          fi
+
+      - name: OpenAPI document is current
+        run: |
+          pnpm --filter @wabrain/api openapi
+          git diff --exit-code -- packages/contracts/openapi.json || {
+            echo "::error::Regenerate packages/contracts/openapi.json with pnpm --filter @wabrain/api openapi."
+            exit 1
+          }
+
+      - run: pnpm build
+
+      - run: pnpm -r --no-bail test

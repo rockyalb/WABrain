@@ -1,0 +1,32 @@
+# Build context for deploy/docker/*.Dockerfile (context = repository root).
+# Keep it small and never ship secrets or local state into an image.
+
+# Dependencies and build output are rebuilt inside the image.
+**/node_modules
+**/dist
+**/build
+**/.vite
+**/coverage
+**/*.tsbuildinfo
+
+# iCloud Drive conflict copies ("file 2.ts", "folder 2") break builds.
+**/* 2
+**/* 2.*
+
+# Secrets and local environment files.
+**/.env
+**/.env.*
+!**/.env.example
+deploy/secrets
+
+# Not needed to build the API or the worker.
+.git
+.github
+.claude
+.idea
+.vscode
+apps/android
+docs
+graphify-out
+**/*.log
+**/.DS_Store

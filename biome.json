@@ -1,0 +1,30 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.5.14/schema.json",
+  "vcs": { "enabled": true, "clientKind": "git", "useIgnoreFile": true },
+  "files": { "includes": ["**/*.ts", "**/*.tsx", "!**/dist/**", "!**/build/**", "!**/node_modules/**"] },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "preset": "recommended",
+      "a11y": {
+        "noAutofocus": "off",
+        "useSemanticElements": "off",
+        "useAriaPropsSupportedByRole": "off"
+      },
+      "style": {
+        "noNonNullAssertion": "off"
+      },
+      "complexity": {
+        "noUselessStringRaw": "off",
+        "useOptionalChain": "off",
+        "noCommaOperator": "off"
+      },
+      "suspicious": {
+        "noControlCharactersInRegex": "off",
+        "noImplicitAnyLet": "off"
+      }
+    }
+  },
+  "formatter": { "enabled": false },
+  "assist": { "enabled": false }
+}

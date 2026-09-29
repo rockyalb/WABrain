@@ -1,0 +1,29 @@
+{
+  "name": "@wabrain/jobs",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": "./src/index.ts",
+  "scripts": {
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hyzyla/pdfium": "2.1.13",
+    "@wabrain/db": "workspace:*",
+    "pg-boss": "^12.33.6",
+    "postgres": "^3.4.9",
+    "zod": "^4.1.11",
+    "@wabrain/agent": "workspace:*",
+    "@wabrain/contracts": "workspace:*",
+    "@wabrain/notify": "workspace:*",
+    "@wabrain/openwa-adapter": "workspace:*",
+    "@wabrain/rules": "workspace:*",
+    "ai": "^7.0.111"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "vitest": "^4.1.11",
+    "drizzle-orm": "^0.45.3"
+  }
+}

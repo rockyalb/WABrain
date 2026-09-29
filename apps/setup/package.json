@@ -1,0 +1,25 @@
+{
+  "name": "@wabrain/setup",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Owner setup page, built to static files that the API serves at /.",
+  "scripts": {
+    "build": "vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "test": "vitest run --passWithNoTests",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@wabrain/contracts": "workspace:*",
+    "preact": "^10.29.8",
+    "uqr": "^0.1.3"
+  },
+  "devDependencies": {
+    "happy-dom": "^20.14.5",
+    "typescript": "^7.0.2",
+    "vite": "^8.2.2",
+    "vitest": "^4.1.11"
+  }
+}

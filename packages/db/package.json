@@ -1,0 +1,29 @@
+{
+  "name": "@wabrain/db",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./testing": "./src/testing.ts"
+  },
+  "scripts": {
+    "db:generate": "drizzle-kit generate",
+    "migrate": "tsx src/bin/migrate.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@wabrain/contracts": "workspace:*",
+    "@wabrain/openwa-adapter": "workspace:*",
+    "drizzle-orm": "^0.45.3",
+    "postgres": "^3.4.9",
+    "zod": "^4.1.11"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "drizzle-kit": "^0.31.11",
+    "tsx": "^4.20.6",
+    "vitest": "^4.1.11"
+  }
+}

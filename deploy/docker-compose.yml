@@ -1,0 +1,295 @@
+# WABrain self-host bundle.
+#
+#   cd deploy && ./init.sh            # creates .env and generates the secrets (never overwrites)
+#   docker compose up -d --build      # openwa, postgres, api, worker
+#   docker compose --profile push --profile https up -d   # plus ntfy and Caddy
+#
+# Services:
+#   openwa    OpenWA gateway (Baileys engine). The ONLY holder of the OpenWA admin key.
+#   postgres  PostgreSQL 17 with pgvector (pg_trgm ships with it). Reachable only by api and worker.
+#   api       HTTP API + the setup page at "/". Holds a session-scoped OpenWA READ key only.
+#   worker    Durable jobs: analysis, media, profiles, reminders, daily summary, Web Push.
+#   ntfy      (profile "push")  UnifiedPush distributor for the Android app.
+#   caddy     (profile "https") TLS reverse proxy for the API (and ntfy).
+#
+# Every variable is documented in .env.example. Compose reads .env from this directory.
+
+name: wabrain
+
+# Environment shared by the API and the worker. The API needs the pipeline variables too, because
+# EMBEDDED_WORKER=true runs the worker inside the API process. Blank values count as unset.
+x-brain-env: &brain-env
+  NODE_ENV: production
+  LOG_LEVEL: ${LOG_LEVEL:-info}
+  DATABASE_URL: postgres://wabrain:${POSTGRES_PASSWORD:-}@postgres:5432/wabrain
+  RUN_MIGRATIONS: ${RUN_MIGRATIONS:-true}
+  SELF_JID: ${SELF_JID:-}
+  SELF_ALIASES: ${SELF_ALIASES:-}
+  # OpenWA read-only access (media and history). Never the admin key.
+  OPENWA_BASE_URL: ${OPENWA_BASE_URL:-http://openwa:2785}
+  OPENWA_SESSION_ID: ${OPENWA_SESSION_ID:-}
+  OPENWA_READ_API_KEY: ${OPENWA_READ_API_KEY:-}
+  # Push
+  NTFY_HOST: ${NTFY_HOST:-}
+  VAPID_SUBJECT: ${VAPID_SUBJECT:-}
+  # Stored provider API keys are encrypted with this key.
+  APP_ENCRYPTION_KEY: ${APP_ENCRYPTION_KEY:-}
+  # Model providers (fallback for roles not configured on the setup page).
+  AI_TEXT_PROVIDER: ${AI_TEXT_PROVIDER:-}
+  AI_TEXT_MODEL: ${AI_TEXT_MODEL:-}
+  AI_TEXT_API_KEY: ${AI_TEXT_API_KEY:-}
+  AI_TEXT_BASE_URL: ${AI_TEXT_BASE_URL:-}
+  AI_TEXT_STRUCTURED_OUTPUTS: ${AI_TEXT_STRUCTURED_OUTPUTS:-}
+  AI_TEXT_DAILY_TOKEN_LIMIT: ${AI_TEXT_DAILY_TOKEN_LIMIT:-}
+  AI_TEXT_DAILY_CALL_LIMIT: ${AI_TEXT_DAILY_CALL_LIMIT:-}
+  AI_VISION_PROVIDER: ${AI_VISION_PROVIDER:-}
+  AI_VISION_MODEL: ${AI_VISION_MODEL:-}
+  AI_VISION_API_KEY: ${AI_VISION_API_KEY:-}
+  AI_VISION_BASE_URL: ${AI_VISION_BASE_URL:-}
+  AI_VISION_STRUCTURED_OUTPUTS: ${AI_VISION_STRUCTURED_OUTPUTS:-}
+  AI_VISION_DAILY_TOKEN_LIMIT: ${AI_VISION_DAILY_TOKEN_LIMIT:-}
+  AI_VISION_DAILY_CALL_LIMIT: ${AI_VISION_DAILY_CALL_LIMIT:-}
+  AI_TRANSCRIPTION_PROVIDER: ${AI_TRANSCRIPTION_PROVIDER:-}
+  AI_TRANSCRIPTION_MODEL: ${AI_TRANSCRIPTION_MODEL:-}
+  AI_TRANSCRIPTION_API_KEY: ${AI_TRANSCRIPTION_API_KEY:-}
+  AI_TRANSCRIPTION_BASE_URL: ${AI_TRANSCRIPTION_BASE_URL:-}
+  AI_TRANSCRIPTION_DAILY_TOKEN_LIMIT: ${AI_TRANSCRIPTION_DAILY_TOKEN_LIMIT:-}
+  AI_TRANSCRIPTION_DAILY_CALL_LIMIT: ${AI_TRANSCRIPTION_DAILY_CALL_LIMIT:-}
+  AI_EMBEDDING_PROVIDER: ${AI_EMBEDDING_PROVIDER:-}
+  AI_EMBEDDING_MODEL: ${AI_EMBEDDING_MODEL:-}
+  AI_EMBEDDING_API_KEY: ${AI_EMBEDDING_API_KEY:-}
+  AI_EMBEDDING_BASE_URL: ${AI_EMBEDDING_BASE_URL:-}
+  AI_EMBEDDING_DIMENSIONS: ${AI_EMBEDDING_DIMENSIONS:-}
+  AI_EMBEDDING_DAILY_TOKEN_LIMIT: ${AI_EMBEDDING_DAILY_TOKEN_LIMIT:-}
+  AI_EMBEDDING_DAILY_CALL_LIMIT: ${AI_EMBEDDING_DAILY_CALL_LIMIT:-}
+  # Pipeline limits and timings (blank = built-in default).
+  ANALYSIS_DEBOUNCE_MS: ${ANALYSIS_DEBOUNCE_MS:-}
+  ANALYSIS_MAX_WAIT_MS: ${ANALYSIS_MAX_WAIT_MS:-}
+  ANALYSIS_MAX_BURST_MESSAGES: ${ANALYSIS_MAX_BURST_MESSAGES:-}
+  ANALYSIS_PRECEDING_MESSAGES: ${ANALYSIS_PRECEDING_MESSAGES:-}
+  MEDIA_WAIT_MAX_MS: ${MEDIA_WAIT_MAX_MS:-}
+  MEDIA_RECHECK_MS: ${MEDIA_RECHECK_MS:-}
+  MODEL_TIMEOUT_MS: ${MODEL_TIMEOUT_MS:-}
+  MEDIA_FETCH_TIMEOUT_MS: ${MEDIA_FETCH_TIMEOUT_MS:-}
+  MEDIA_MAX_IMAGE_BYTES: ${MEDIA_MAX_IMAGE_BYTES:-}
+  MEDIA_MAX_AUDIO_BYTES: ${MEDIA_MAX_AUDIO_BYTES:-}
+  MEDIA_MAX_AUDIO_SECONDS: ${MEDIA_MAX_AUDIO_SECONDS:-}
+  MEDIA_MAX_ATTEMPTS: ${MEDIA_MAX_ATTEMPTS:-}
+  MEDIA_MAX_PDF_BYTES: ${MEDIA_MAX_PDF_BYTES:-}
+  MEDIA_MAX_PDF_PAGES: ${MEDIA_MAX_PDF_PAGES:-}
+  MEDIA_MAX_PDF_PAGE_PIXELS: ${MEDIA_MAX_PDF_PAGE_PIXELS:-}
+  MEDIA_MAX_PDF_TOTAL_PIXELS: ${MEDIA_MAX_PDF_TOTAL_PIXELS:-}
+  MEDIA_MAX_PDF_IMAGE_BYTES: ${MEDIA_MAX_PDF_IMAGE_BYTES:-}
+  MEDIA_PDF_TIMEOUT_MS: ${MEDIA_PDF_TIMEOUT_MS:-}
+  PROVIDER_RETRY_MS: ${PROVIDER_RETRY_MS:-}
+  REMINDER_GRACE_MS: ${REMINDER_GRACE_MS:-}
+  SUMMARY_WINDOW_MS: ${SUMMARY_WINDOW_MS:-}
+
+# Node services: non-root (set in the images), read-only root filesystem, no capabilities.
+x-node-hardening: &node-hardening
+  init: true
+  read_only: true
+  tmpfs:
+    - /tmp
+  cap_drop:
+    - ALL
+  security_opt:
+    - no-new-privileges:true
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: wabrain
+      POSTGRES_DB: wabrain
+      # Generated by init.sh. Changing it later does not change the password of an existing volume.
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    networks:
+      - data
+    security_opt:
+      - no-new-privileges:true
+    shm_size: 256mb
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U wabrain -d wabrain"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+  openwa:
+    # rmyndharis/OpenWA, pinned; see https://github.com/rmyndharis/OpenWA/releases before upgrading.
+    image: ghcr.io/rmyndharis/openwa:${OPENWA_VERSION:-0.23.6}
+    restart: unless-stopped
+    # Room for OpenWA's graceful drain before SIGKILL.
+    stop_grace_period: 45s
+    environment:
+      NODE_ENV: production
+      TZ: ${TZ:-UTC}
+      PORT: "2785"
+      LOG_LEVEL: ${LOG_LEVEL:-info}
+      # Read-only root filesystem: writable HOME/XDG on the tmpfs (as in OpenWA's own compose).
+      HOME: /tmp
+      XDG_CONFIG_HOME: /tmp/.config
+      XDG_CACHE_HOME: /tmp/.cache
+      # Baileys engine, credentials on the volume, full-history sync for the history import.
+      ENGINE_TYPE: baileys
+      BAILEYS_AUTH_DIR: /app/data/baileys
+      BAILEYS_SYNC_FULL_HISTORY: "true"
+      # Baileys' default (online on connect) silences notifications on the paired phone.
+      BAILEYS_MARK_ONLINE_ON_CONNECT: "false"
+      # Eager status reads can get a fresh companion unlinked; live statuses still arrive.
+      STATUS_SEED_ON_READY: "false"
+      # Single instance: restart the paired session after a crash or redeploy.
+      AUTO_START_SESSIONS: "true"
+      # Stable node identity across container re-creation (session lease ownership).
+      NODE_ID: openwa
+      # SQLite metadata store and media storage on the same volume.
+      DATABASE_TYPE: sqlite
+      STORAGE_TYPE: local
+      # Admin credential: stays inside this service. WABrain gets a read key instead.
+      API_MASTER_KEY: ${OPENWA_API_MASTER_KEY:-}
+      API_KEY_PEPPER: ${OPENWA_API_KEY_PEPPER:-}
+      # Webhooks keep SSRF protection on; only the brain API service name is allowed internally.
+      WEBHOOK_SSRF_PROTECT: "true"
+      SSRF_ALLOWED_HOSTS: api
+      # The dashboard is only published on localhost over plain HTTP (use an SSH tunnel).
+      CSP_UPGRADE_INSECURE_REQUESTS: "false"
+    volumes:
+      - openwa-data:/app/data
+    ports:
+      - "127.0.0.1:${OPENWA_PORT:-2785}:2785"
+    networks:
+      - app
+    # Hardening from OpenWA's compose: the root entrypoint only chowns /app/data and drops to the
+    # openwa user with gosu; the node process then keeps no capabilities.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_OVERRIDE
+      - FOWNER
+      - SETGID
+      - SETUID
+    security_opt:
+      - no-new-privileges:true
+    # Healthcheck: the image's own (GET /api/health/ready).
+
+  api:
+    <<: *node-hardening
+    build:
+      context: ..
+      dockerfile: deploy/docker/api.Dockerfile
+    image: ${WABRAIN_API_IMAGE:-wabrain-api:latest}
+    environment:
+      <<: *brain-env
+      HOST: 0.0.0.0
+      API_PORT: "8787"
+      # Public HTTPS URL (goes into the pairing QR code). Defaults to the Caddy domain.
+      PUBLIC_BASE_URL: ${PUBLIC_BASE_URL:-https://${BRAIN_DOMAIN:-localhost}}
+      SETUP_ORIGIN: ${SETUP_ORIGIN:-}
+      OPENWA_WEBHOOK_SECRET: ${OPENWA_WEBHOOK_SECRET:-}
+      # Browser link to the OpenWA dashboard (QR pairing). Default: the localhost-only port, reached
+      # through an SSH tunnel.
+      OPENWA_DASHBOARD_URL: ${OPENWA_DASHBOARD_URL:-http://127.0.0.1:${OPENWA_PORT:-2785}}
+      SETUP_BOOTSTRAP_TOKEN: ${SETUP_BOOTSTRAP_TOKEN:-}
+      SESSION_TTL_HOURS: ${SESSION_TTL_HOURS:-12}
+      TRUST_PROXY: ${TRUST_PROXY:-false}
+      EMBEDDED_WORKER: ${EMBEDDED_WORKER:-false}
+    ports:
+      - "${API_BIND_ADDRESS:-127.0.0.1}:${API_PUBLISH_PORT:-8787}:8787"
+    networks:
+      - app
+      - data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  worker:
+    <<: *node-hardening
+    build:
+      context: ..
+      dockerfile: deploy/docker/worker.Dockerfile
+    image: ${WABRAIN_WORKER_IMAGE:-wabrain-worker:latest}
+    environment:
+      <<: *brain-env
+    networks:
+      - app
+      - data
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  ntfy:
+    profiles: ["push"]
+    image: binwiederhier/ntfy:${NTFY_VERSION:-v2.28.0}
+    command: serve
+    init: true
+    restart: unless-stopped
+    environment:
+      NTFY_BASE_URL: ${NTFY_BASE_URL:-https://${NTFY_DOMAIN:-ntfy.localhost}}
+      NTFY_LISTEN_HTTP: ":8080"
+      NTFY_BEHIND_PROXY: "true"
+      NTFY_CACHE_FILE: /var/lib/ntfy/cache.db
+      NTFY_AUTH_FILE: /var/lib/ntfy/user.db
+      # Locked down except UnifiedPush topics (random, unguessable "up…" names).
+      NTFY_AUTH_DEFAULT_ACCESS: ${NTFY_AUTH_DEFAULT_ACCESS:-deny-all}
+      NTFY_AUTH_ACCESS: ${NTFY_AUTH_ACCESS:-*:up*:rw}
+      NTFY_ENABLE_LOGIN: "true"
+    volumes:
+      - ntfy-data:/var/lib/ntfy
+    networks:
+      - app
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --tries=1 http://127.0.0.1:8080/v1/health -O - | grep -Eq '\"healthy\" *: *true'"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+
+  caddy:
+    profiles: ["https"]
+    image: caddy:${CADDY_VERSION:-2.10-alpine}
+    restart: unless-stopped
+    environment:
+      BRAIN_DOMAIN: ${BRAIN_DOMAIN:-localhost}
+      # Blank means "not used": Caddy only applies its own default when the variable is unset.
+      NTFY_DOMAIN: ${NTFY_DOMAIN:-http://ntfy.localhost}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      - app
+    security_opt:
+      - no-new-privileges:true
+    depends_on:
+      - api
+
+volumes:
+  postgres-data:
+  openwa-data:
+  ntfy-data:
+  caddy-data:
+  caddy-config:
+
+networks:
+  # openwa, api, worker, ntfy, caddy. Has internet egress (WhatsApp, model providers, ACME).
+  app:
+  # Database network: no egress, and only api and worker can reach postgres.
+  data:
+    internal: true

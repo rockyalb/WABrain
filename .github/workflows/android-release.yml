@@ -1,0 +1,117 @@
+name: Android release
+
+# Builds the signed release APK for a version tag (v1.0.0 must match versionName
+# in apps/android/app/build.gradle.kts) and attaches it to a GitHub release.
+#
+# Repository secrets (Settings → Secrets and variables → Actions):
+#   WABRAIN_KEYSTORE_BASE64   the release keystore file, base64-encoded (base64 -w0 release.jks)
+#   WABRAIN_KEYSTORE_PASSWORD keystore password
+#   WABRAIN_KEY_ALIAS         key alias
+#   WABRAIN_KEY_PASSWORD      key password
+# The names match the Gradle properties/environment variables that
+# app/build.gradle.kts reads for local signing.
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: android-release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  node-checks:
+    uses: ./.github/workflows/node.yml
+
+  release:
+    needs: node-checks
+    name: Signed release APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+    defaults:
+      run:
+        working-directory: apps/android
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches versionName
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          version=$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
+          if [ "v$version" != "$TAG" ]; then
+            echo "::error::Tag $TAG does not match versionName $version in apps/android/app/build.gradle.kts."
+            exit 1
+          fi
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 21
+
+      - uses: android-actions/setup-android@v3
+        with:
+          # The default also installs the legacy "tools" package, which current cmdline-tools no longer ship.
+          packages: platform-tools
+
+      - name: Install Android SDK
+        run: sdkmanager "platforms;android-37.0" "build-tools;37.0.0"
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          # Release builds never write the shared Gradle cache.
+          cache-read-only: true
+
+      - name: Restore the keystore
+        env:
+          KEYSTORE_BASE64: ${{ secrets.WABRAIN_KEYSTORE_BASE64 }}
+          WABRAIN_KEYSTORE_PASSWORD: ${{ secrets.WABRAIN_KEYSTORE_PASSWORD }}
+          WABRAIN_KEY_ALIAS: ${{ secrets.WABRAIN_KEY_ALIAS }}
+          WABRAIN_KEY_PASSWORD: ${{ secrets.WABRAIN_KEY_PASSWORD }}
+        run: |
+          for name in KEYSTORE_BASE64 WABRAIN_KEYSTORE_PASSWORD WABRAIN_KEY_ALIAS WABRAIN_KEY_PASSWORD; do
+            if [ -z "$(printenv "$name")" ]; then
+              echo "::error::Repository secret for $name is not set; refusing to build an unsigned release."
+              exit 1
+            fi
+          done
+          keystore="$RUNNER_TEMP/wabrain-release.jks"
+          printf '%s' "$KEYSTORE_BASE64" | base64 --decode > "$keystore"
+          chmod 600 "$keystore"
+          echo "WABRAIN_KEYSTORE_FILE=$keystore" >> "$GITHUB_ENV"
+
+      - name: Test, lint and assemble the release
+        env:
+          WABRAIN_KEYSTORE_PASSWORD: ${{ secrets.WABRAIN_KEYSTORE_PASSWORD }}
+          WABRAIN_KEY_ALIAS: ${{ secrets.WABRAIN_KEY_ALIAS }}
+          WABRAIN_KEY_PASSWORD: ${{ secrets.WABRAIN_KEY_PASSWORD }}
+        # AGP creates unit test tasks for the debug variant only; lint and assemble the release itself.
+        run: ./gradlew --no-daemon :app:testDebugUnitTest :app:lintRelease :app:assembleRelease
+
+      - name: Verify the signature
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          apk=app/build/outputs/apk/release/app-release.apk
+          apksigner=$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -n 1)
+          "$apksigner" verify --verbose --print-certs "$apk"
+          out="$RUNNER_TEMP/wabrain-$TAG.apk"
+          cp "$apk" "$out"
+          (cd "$RUNNER_TEMP" && sha256sum "wabrain-$TAG.apk" > "wabrain-$TAG.apk.sha256")
+          echo "APK=$out" >> "$GITHUB_ENV"
+
+      - name: Remove the keystore
+        if: always()
+        run: rm -f "$RUNNER_TEMP/wabrain-release.jks"
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: gh release create "$TAG" "$APK" "$APK.sha256" --title "WABrain $TAG" --generate-notes --verify-tag

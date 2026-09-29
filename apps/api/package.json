@@ -1,0 +1,38 @@
+{
+  "name": "@wabrain/api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "tsup",
+    "dev": "tsx watch --env-file=../../.env src/index.ts",
+    "start": "node dist/index.js",
+    "migrate": "pnpm --filter @wabrain/db migrate",
+    "openapi": "tsx src/scripts/generate-openapi.ts",
+    "test": "vitest run",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.19.6",
+    "@wabrain/agent": "workspace:*",
+    "@wabrain/contracts": "workspace:*",
+    "@wabrain/db": "workspace:*",
+    "@wabrain/jobs": "workspace:*",
+    "@wabrain/notify": "workspace:*",
+    "@wabrain/openwa-adapter": "workspace:*",
+    "@wabrain/rules": "workspace:*",
+    "@wabrain/worker": "workspace:*",
+    "drizzle-orm": "^0.45.3",
+    "hono": "^4.13.5",
+    "pg-boss": "^12.33.6",
+    "postgres": "^3.4.9",
+    "zod": "^4.1.11",
+    "zod-openapi": "^6.0.2"
+  },
+  "devDependencies": {
+    "@types/node": "^24.10.1",
+    "tsup": "^8.5.0",
+    "tsx": "^4.20.6",
+    "vitest": "^4.1.11"
+  }
+}

@@ -1,0 +1,15 @@
+# TLS reverse proxy for the "https" profile. Caddy obtains certificates automatically; point the
+# DNS records of BRAIN_DOMAIN (and NTFY_DOMAIN, with the "push" profile) at this host first.
+# Set TRUST_PROXY=true for the API when it runs behind this proxy.
+
+# WABrain API and setup page. The OpenWA dashboard is deliberately NOT exposed here.
+{$BRAIN_DOMAIN:localhost} {
+	encode zstd gzip
+	reverse_proxy api:8787
+}
+
+# Self-hosted ntfy (UnifiedPush distributor). With NTFY_DOMAIN unset this block only answers
+# plain HTTP for "ntfy.localhost", so no certificate is requested.
+{$NTFY_DOMAIN:http://ntfy.localhost} {
+	reverse_proxy ntfy:8080
+}
