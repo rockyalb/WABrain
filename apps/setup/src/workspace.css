@@ -257,9 +257,11 @@
   .page-header > .m-icon-button { position: absolute; top: -6px; right: -4px; }
   .ws-back { margin-bottom: .6rem; }
 
-  .m-daily-count { display: grid; justify-items: center; align-content: center; min-width: 78px; height: 44px; flex: none; padding: 0 7px; border-radius: 13px; background: var(--tint); color: var(--accent); }
-  .m-daily-count b { font: 700 .8rem/1 "Figtree WAB", sans-serif; font-variant-numeric: tabular-nums; }
-  .m-daily-count small { color: var(--muted); font: 600 .56rem/1.1 "Figtree WAB", sans-serif; letter-spacing: .025em; text-transform: uppercase; }
+  .m-ring { position: relative; display: grid; place-items: center; width: 44px; height: 44px; flex: none; }
+  .m-ring svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .m-ring circle { fill: none; stroke: var(--accent-bright); stroke-width: 3.5; opacity: .18; }
+  .m-ring circle.m-ring-value { opacity: 1; stroke-linecap: round; transition: stroke-dashoffset .6s var(--spring); }
+  .m-ring b { font: 700 .66rem "Figtree WAB", sans-serif; }
 
   .m-ask-bar { display: flex; align-items: center; gap: 9px; height: 46px; padding: 0 8px 0 14px; margin: 0 0 10px; border: 1px solid var(--glass-border); border-radius: 23px; background: var(--surface); box-shadow: var(--shadow); color: var(--muted); font-size: 1rem; text-decoration: none !important; backdrop-filter: blur(14px); -webkit-backdrop-filter: blur(14px); }
   .m-ask-bar svg { color: var(--accent-bright); }

@@ -19,7 +19,7 @@ const TABS: Array<{ id: TaskTab; label: string }> = [
 ];
 
 export function TasksView(props: { hash: string }) {
-  const { data, api, run, runTask, runReview, pending, busy, refresh } = useWorkspace();
+  const { data, api, run, runTask, runReview, pending, refresh } = useWorkspace();
   const [context, setContext] = useState<string>("all");
   const [editor, setEditor] = useState<"new" | ReviewItem | null>(null);
   const [contact, setContact] = useState("");
@@ -159,11 +159,16 @@ function useClosedSearch(personId: string, refetchKey: string | null) {
   return { tasks: fresh ? state.tasks : [], next: fresh ? state.next : null, loading: !fresh || state.loading, error: fresh ? state.error : null, more: () => (state.next ? load(personId, state.next) : Promise.resolve()) };
 }
 
-/** Done-today ring from the Android Tasks header. */
+/** Completed-today vs created-today ring, as in the Android Tasks header. */
 function ProgressRing(props: { completed: number; created: number }) {
   if (props.completed === 0 && props.created === 0) return null;
-  return <span class="m-daily-count mobile-only" role="img" aria-label={`${props.completed} completed today / ${props.created} created today`}>
-    <b>{props.completed} / {props.created}</b><small>done / created</small>
+  const circumference = 2 * Math.PI * 17;
+  // Tasks completed today may have been created earlier, so the ring can fill before today's count is reached.
+  const fraction = props.created === 0 ? 1 : Math.min(props.completed / props.created, 1);
+  return <span class="m-ring mobile-only" role="img" aria-label={`${props.completed} completed today, ${props.created} created today`}>
+    <svg viewBox="0 0 44 44" aria-hidden="true"><circle cx="22" cy="22" r="17" /><circle cx="22" cy="22" r="17" class="m-ring-value"
+      style={{ strokeDasharray: circumference, strokeDashoffset: circumference * (1 - fraction) }} /></svg>
+    <b>{props.completed}/{props.created}</b>
   </span>;
 }
 

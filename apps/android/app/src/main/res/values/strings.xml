@@ -274,7 +274,6 @@
     <string name="tab_waiting">Waiting on</string>
     <string name="task_complete_label">Complete: %1$s</string>
     <string name="task_completed_snackbar">Task completed</string>
-    <string name="tasks_activity_caption">done / created today</string>
     <string name="tasks_activity_description">%1$d completed today, %2$d created today</string>
     <string name="task_context">Context</string>
     <string name="task_context_override">Context (override)</string>

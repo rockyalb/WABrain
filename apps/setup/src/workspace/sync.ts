@@ -3,6 +3,8 @@ import type { Snapshot, SyncResponse, Task } from "./model";
 type Entity = { id: string };
 
 function mergeEntities<T extends Entity>(current: T[], changed: T[], deleted: string[]): T[] {
+  // Keep the same array when nothing changed so views depending on it don't re-render.
+  if (changed.length === 0 && deleted.length === 0) return current;
   const removed = new Set(deleted);
   const changes = new Map(changed.filter((item) => !removed.has(item.id)).map((item) => [item.id, item]));
   const merged = current
