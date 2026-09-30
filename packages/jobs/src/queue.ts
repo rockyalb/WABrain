@@ -35,6 +35,8 @@ export interface EnqueueOptions {
   singletonKey?: string;
   /** Seconds from now (database clock) or an absolute time. */
   startAfter?: number | Date;
+  /** Queued jobs of a queue run highest priority first, then oldest first. Default 0. */
+  priority?: number;
   /** Enqueue inside this transaction, so the job exists iff the transaction commits. */
   tx?: TransactionSql;
 }
@@ -117,6 +119,7 @@ export class JobQueue {
     return this.boss.send(name, payload, {
       singletonKey: options.singletonKey,
       startAfter: options.startAfter,
+      ...(options.priority ? { priority: options.priority } : {}),
       ...(options.tx ? { db: pgBossDb(options.tx) } : {}),
     });
   }

@@ -122,6 +122,13 @@ export const jobs = {
   }),
 } as const;
 
+/**
+ * process-media priorities. Media of messages arriving live runs before backlog (history import,
+ * operator re-queues), so a fresh voice note is transcribed while its chat's analysis is still waiting
+ * for it, even when older media keeps failing and retrying.
+ */
+export const MEDIA_PRIORITY = { live: 10, backlog: 0 } as const;
+
 export type JobName = keyof typeof jobs;
 export type JobData<N extends JobName> = z.infer<(typeof jobs)[N]["schema"]>;
 

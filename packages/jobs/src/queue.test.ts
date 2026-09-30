@@ -1,6 +1,8 @@
 import { createTestDatabase, type TestDatabase } from "@wabrain/db/testing";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { JobQueue } from "./queue.js";
+import { MEDIA_PRIORITY } from "./registry.js";
+import { createIntakeScheduler } from "./worker.js";
 
 let testDb: TestDatabase;
 let queue: JobQueue;
@@ -87,6 +89,28 @@ describe("JobQueue", () => {
     await waitFor(() => done >= 3);
     expect(maxSameKey).toBe(1);
     expect(maxTotal).toBeGreaterThanOrEqual(2);
+  });
+
+  it("runs live media before older backlog media", async () => {
+    // No worker handles profile-media in this file, so the jobs stay queued for an explicit fetch.
+    for (const id of ["backlog-1", "backlog-2", "backlog-3"]) {
+      await queue.enqueue("profile-media", { mediaObjectId: id }, { singletonKey: id, priority: MEDIA_PRIORITY.backlog });
+    }
+    await queue.enqueue("profile-media", { mediaObjectId: "live-1" }, { singletonKey: "live-1", priority: MEDIA_PRIORITY.live });
+    // One at a time, like a worker slot (a batch comes back unordered).
+    const order: string[] = [];
+    for (let slot = 0; slot < 4; slot += 1) {
+      const [job] = await queue.boss.fetch("profile-media", { batchSize: 1 });
+      order.push((job!.data as { mediaObjectId: string }).mediaObjectId);
+    }
+    expect(order[0]).toBe("live-1");
+    expect(order.slice(1).sort()).toEqual(["backlog-1", "backlog-2", "backlog-3"]);
+  });
+
+  it("queues media of live messages at live priority", async () => {
+    await createIntakeScheduler(queue).enqueueMedia("webhook-media");
+    const jobs = await queue.findJobs("process-media");
+    expect(jobs.find((job) => (job.data as { mediaObjectId: string }).mediaObjectId === "webhook-media")).toMatchObject({ priority: MEDIA_PRIORITY.live });
   });
 
   it("retries failures and dead-letters them with the reason", async () => {

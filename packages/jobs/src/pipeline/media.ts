@@ -34,6 +34,7 @@ import {
 import { createHash } from "node:crypto";
 import { checkBudget, recordDeferral } from "./budget.js";
 import type { ProvidersState } from "../providers.js";
+import { MEDIA_PRIORITY } from "../registry.js";
 import type { PipelineDeps } from "./deps.js";
 import { PdfError, looksLikePdf, readPdf, type PdfPageText, type PdfReadResult } from "./pdf.js";
 
@@ -311,7 +312,8 @@ export async function processMedia(deps: PipelineDeps, mediaObjectId: string): P
   if (!ctx.sessionId) return reject("failed", "no_openwa_session");
 
   const deferUntil = async (deferredRole: ProviderRole, until: Date): Promise<MediaOutcome> => {
-    await deps.queue.enqueue("process-media", { mediaObjectId }, { singletonKey: mediaObjectId, startAfter: until });
+    const priority = ctx.message.source === "history" ? MEDIA_PRIORITY.backlog : MEDIA_PRIORITY.live;
+    await deps.queue.enqueue("process-media", { mediaObjectId }, { singletonKey: mediaObjectId, startAfter: until, priority });
     await recordDeferral(database, { role: deferredRole, reason: "budget", at: deps.now().toISOString(), until: until.toISOString() });
     deps.logger.warn("media deferred: daily budget reached", { mediaObjectId, role: deferredRole, until: until.toISOString() });
     return { status: "deferred", until };

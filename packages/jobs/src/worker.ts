@@ -21,6 +21,7 @@ import { registerPipeline, sweepStaleAnalysis } from "./pipeline/index.js";
 import { runHistoryImport } from "./history-import.js";
 import type { PipelineDeps } from "./pipeline/deps.js";
 import type { JobLogger, JobQueue } from "./queue.js";
+import { MEDIA_PRIORITY } from "./registry.js";
 
 export const ANALYSIS_DEBOUNCE_MS = 90_000;
 const STALE_EVENT_MS = 2 * 60_000;
@@ -46,7 +47,7 @@ export function createIntakeScheduler(queue: JobQueue, analysisDebounceMs = ANAL
   return {
     debounceAnalysis: (chatId) => queue.debounceChat(chatId, { delayMs: analysisDebounceMs, maxWaitMs: analysisMaxWaitMs }),
     enqueueMedia: async (mediaObjectId) => {
-      await queue.enqueue("process-media", { mediaObjectId }, { singletonKey: mediaObjectId });
+      await queue.enqueue("process-media", { mediaObjectId }, { singletonKey: mediaObjectId, priority: MEDIA_PRIORITY.live });
     },
   };
 }

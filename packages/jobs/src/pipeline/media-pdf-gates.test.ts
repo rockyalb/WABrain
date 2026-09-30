@@ -17,6 +17,7 @@ import { createRulesIntakeFilter } from "@wabrain/rules";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ProvidersState } from "../providers.js";
+import { MEDIA_PRIORITY } from "../registry.js";
 import { defaultPipelineConfig } from "./config.js";
 import type { MediaSource, PipelineDeps } from "./deps.js";
 import { processMedia, requeueLegacyPdfs, requeueUnavailableMedia } from "./media.js";
@@ -56,12 +57,12 @@ function openWa(files: Record<string, Buffer>) {
 }
 
 function harness(providers: Providers | null, media: MediaSource, limits: Partial<ProvidersState["limits"]> = {}) {
-  const enqueued: Array<{ name: string; data: unknown; startAfter?: unknown }> = [];
+  const enqueued: Array<{ name: string; data: unknown; startAfter?: unknown; priority?: number }> = [];
   const notifier = { notify() {} };
   const deps: PipelineDeps = {
     database: testDb.database,
     queue: {
-      enqueue: async (name, data, options) => (enqueued.push({ name, data, startAfter: options?.startAfter }), "job"),
+      enqueue: async (name, data, options) => (enqueued.push({ name, data, startAfter: options?.startAfter, priority: options?.priority }), "job"),
       debounceChat: async () => {},
     },
     providers: {
@@ -142,7 +143,10 @@ describe("PDFs and the vision gates", () => {
     const outcome = await processMedia(over.deps, media.id);
     expect(outcome).toMatchObject({ status: "deferred" });
     expect(vision.doGenerateCalls).toHaveLength(0);
-    expect(over.enqueued).toEqual([{ name: "process-media", data: { mediaObjectId: media.id }, startAfter: (outcome as { until: Date }).until }]);
+    // A live message's media keeps its place ahead of backlog when it comes back after the reset.
+    expect(over.enqueued).toEqual([
+      { name: "process-media", data: { mediaObjectId: media.id }, startAfter: (outcome as { until: Date }).until, priority: MEDIA_PRIORITY.live },
+    ]);
     expect(await mediaRow(media.id)).toMatchObject({ status: "pending", attempts: 0, derivedText: null });
 
     const ready = harness(createMockProviders({ vision }), files.source);

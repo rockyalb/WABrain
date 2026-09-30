@@ -271,12 +271,13 @@ describe("analyzeChat", () => {
   });
 });
 
-function toModelAction(expected: ExpectedAction, evidenceId: string): ModelTaskAction {
+function toModelAction(expected: ExpectedAction, evidenceId: string, index = 0): ModelTaskAction {
   switch (expected.type) {
     case "create":
       return action({
         kind: expected.kind,
-        title: "Eval task title",
+        // Distinct per create: the validator drops creates with the same kind and title as duplicates.
+        title: `Eval task title ${index + 1}`,
         due: expected.dueDate ? { date: expected.dueDate, time: expected.dueTime ?? null } : null,
         contextId: expected.contextId ?? null,
         contextReason: expected.contextId ? "fixture override" : null,
@@ -303,7 +304,7 @@ describe("eval fixtures", () => {
 
   it.each(evalCases.map((evalCase) => [evalCase.id, evalCase] as const))("%s is well-formed and scores perfectly with a perfect model", async (_id, evalCase) => {
     const evidenceId = evalCase.burst.at(-1)!.id;
-    const model = mockJsonModel({ actions: evalCase.expected.map((expected) => toModelAction(expected, evidenceId)) });
+    const model = mockJsonModel({ actions: evalCase.expected.map((expected, index) => toModelAction(expected, evidenceId, index)) });
     const result = await analyzeChat(createMockProviders({ text: model }), buildCaseMemory(evalCase));
     expect(result.dropped).toEqual([]);
     expect(scoreCase(evalCase, result.actions).problems).toEqual([]);
