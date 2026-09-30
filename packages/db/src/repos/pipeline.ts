@@ -57,6 +57,29 @@ export async function listMessagesBefore(
   return rows.reverse();
 }
 
+/** The earliest `limit` messages at or after `from`, excluding `excludeIds`, oldest first. */
+export async function listMessagesAfter(
+  db: Db,
+  chatId: string,
+  from: Date,
+  excludeIds: readonly string[],
+  limit: number,
+): Promise<MessageRow[]> {
+  if (limit <= 0) return [];
+  return db
+    .select()
+    .from(messages)
+    .where(
+      and(
+        eq(messages.chatId, chatId),
+        gte(messages.sentAt, from),
+        excludeIds.length ? notInArray(messages.id, [...excludeIds]) : undefined,
+      ),
+    )
+    .orderBy(asc(messages.sentAt), asc(messages.id))
+    .limit(limit);
+}
+
 export async function listMessagesByIds(db: Db, chatId: string, ids: readonly string[]): Promise<MessageRow[]> {
   if (!ids.length) return [];
   return db

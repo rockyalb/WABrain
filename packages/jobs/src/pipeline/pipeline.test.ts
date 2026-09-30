@@ -22,9 +22,9 @@ import type { ProvidersState } from "../providers.js";
 import { runChatAnalysis } from "./analysis.js";
 import { defaultPipelineConfig } from "./config.js";
 import type { MediaSource, PipelineDeps } from "./deps.js";
-import { processMedia } from "./media.js";
+import { processMedia, requeueExhaustedVoice } from "./media.js";
 import { runNotificationTick } from "./notifications.js";
-import { runChatProfile } from "./profile.js";
+import { profileRecoveredMedia, runChatProfile } from "./profile.js";
 import { buildPdf } from "./test-fixtures/pdf.js";
 import { localDay } from "./time.js";
 
@@ -415,6 +415,47 @@ describe("media job", () => {
     expect(await processMedia(h.deps, media.id)).toEqual({ status: "done", deduped: false });
     const [message] = await testDb.database.db.select().from(schema.messages).where(eq(schema.messages.id, stored.messageId));
     expect(message).toMatchObject({ derivedText: "send me the contract tomorrow", language: "en" });
+  });
+
+  it("re-queues voice notes that used up their attempts and profiles the ones the profile read past", async () => {
+    const jid = nextJid();
+    const text = (id: string, body: string, t: number) => ingest(makeOpenWaEnvelope({ data: { id, chatId: jid, from: jid, type: "chat", body, timestamp: t } }));
+    await text("rv-hello", "Good morning", 1_790_000_000);
+    const voice = await ingest(
+      makeOpenWaEnvelope({ data: { id: "rv-voice", chatId: jid, from: jid, type: "voice", hasMedia: true, body: "", timestamp: 1_790_000_060, media: { mimetype: "audio/ogg; codecs=opus" } } }),
+    );
+    if (voice.status !== "stored") throw new Error(voice.status);
+    const [media] = await testDb.database.db.select().from(schema.mediaObjects).where(eq(schema.mediaObjects.messageId, voice.messageId));
+    const other = await mediaMessage("voice", "audio/ogg", "rv-other");
+    const { db } = testDb.database;
+    await db.update(schema.mediaObjects).set({ status: "failed", error: "retries_exhausted:AI_APICallError", attempts: 4 }).where(eq(schema.mediaObjects.id, media!.id));
+    await db.update(schema.mediaObjects).set({ status: "failed", error: "not_found" }).where(eq(schema.mediaObjects.id, other.media.id));
+
+    const facts = scriptedJsonModel(({ text: prompt }) => {
+      const source = /"id":"([^"]+)"[^\n]*engineer/.exec(prompt)?.[1];
+      return { facts: source ? [{ subject: "this_person", key: "role", value: "engineer", confidence: 0.9, selfClaimed: true, sourceMessageIds: [source] }] : [] };
+    });
+    const providers = createMockProviders({ text: facts, transcription: mockTranscriptionModel("I am a civil engineer", "en") });
+    const h = harness({ providers, media: fakeOpenWa({ "rv-voice": { bytes: Buffer.concat([ogg, Buffer.from("rv")]), type: "audio/ogg" } }).source });
+    const chat = await findChatByJid(db, jid);
+    // The profile already read past the voice note while it had no text.
+    expect(await runChatProfile(h.deps, chat!.id)).toMatchObject({ status: "profiled", facts: 0 });
+
+    expect(await requeueExhaustedVoice(h.deps.database, h.deps.queue)).toBe(1);
+    expect(h.enqueued).toEqual([{ name: "process-media", data: { mediaObjectId: media!.id }, startAfter: undefined }]);
+    const [requeued] = await db.select().from(schema.mediaObjects).where(eq(schema.mediaObjects.id, media!.id));
+    expect(requeued).toMatchObject({ status: "pending", attempts: 0 });
+    const [untouched] = await db.select().from(schema.mediaObjects).where(eq(schema.mediaObjects.id, other.media.id));
+    expect(untouched).toMatchObject({ status: "failed", error: "not_found" });
+
+    expect(await processMedia(h.deps, media!.id)).toEqual({ status: "done", deduped: false });
+    expect(h.enqueued.at(-1)).toMatchObject({ name: "profile-media", data: { mediaObjectId: media!.id } });
+    expect(await profileRecoveredMedia(h.deps, media!.id)).toEqual({ status: "profiled", facts: 1 });
+    const personFacts = await db.select().from(schema.personFacts).where(eq(schema.personFacts.personId, chat!.personId!));
+    expect(personFacts).toEqual([expect.objectContaining({ key: "role", value: "engineer", sourceMessageIds: [voice.messageId] })]);
+    // Facts only: no task and no analysis run came from the recovered voice note.
+    expect(await db.select().from(schema.tasks).where(eq(schema.tasks.chatId, chat!.id))).toEqual([]);
+    expect(await requeueExhaustedVoice(h.deps.database, h.deps.queue)).toBe(0);
   });
 
   it("enforces limits and records permanent failures with a reason", async () => {

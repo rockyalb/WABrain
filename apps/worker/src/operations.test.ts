@@ -13,6 +13,8 @@ describe("operations command", () => {
     expect(parseArgs(["retry", "7d0c1d8e-58c4-4d5e-9d63-8f3f6f7b1f0a"])).toMatchObject({ command: "retry", id: "7d0c1d8e-58c4-4d5e-9d63-8f3f6f7b1f0a" });
     expect(parseArgs(["requeue-media"])).toEqual({ command: "requeue-media", json: false });
     expect(parseArgs(["requeue-media", "--all"])).toBeNull();
+    expect(parseArgs(["requeue-voice"])).toEqual({ command: "requeue-voice", json: false });
+    expect(parseArgs(["requeue-voice", "--all"])).toBeNull();
     expect(parseArgs([])).toBeNull();
     expect(parseArgs(["retry"])).toBeNull();
     expect(parseArgs(["retry", "a", "b"])).toBeNull();

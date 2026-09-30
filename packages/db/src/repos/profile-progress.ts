@@ -53,6 +53,24 @@ export async function getProfileProgress(db: Db, chatId: string): Promise<Profil
   };
 }
 
+/**
+ * True when a successful extraction has already consumed `position`: the chat's cursor is at or past
+ * it. Text that appears on such a message later (media recovered after a failure) is never read by
+ * profile-chat again.
+ */
+export async function profileHasRead(db: Db, chatId: string, position: ProfileMessageKey): Promise<boolean> {
+  const [row] = await db
+    .select({ chatId: chatPipelineState.chatId })
+    .from(chatPipelineState)
+    .where(
+      and(
+        eq(chatPipelineState.chatId, chatId),
+        sql`(${chatPipelineState.profileCursorCreatedAt}, ${chatPipelineState.profileCursorMessageId}) >= (${position.createdAt.toISOString()}::timestamptz, ${position.messageId})`,
+      ),
+    );
+  return Boolean(row);
+}
+
 /** The next messages after `cursor` in storage order (at most `limit`). */
 export async function listProfileBatch(db: Db, chatId: string, cursor: ProfileMessageKey | null, limit: number): Promise<MessageRow[]> {
   return db

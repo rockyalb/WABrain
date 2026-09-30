@@ -5,7 +5,7 @@
  * state, and it is idempotent: re-running it (also after a crash between the update and the enqueue)
  * returns the same rows until the media job has processed them.
  */
-import { and, asc, eq, sql } from "drizzle-orm";
+import { and, asc, eq, inArray, like, sql } from "drizzle-orm";
 import type { Db } from "../client.js";
 import { mediaObjects } from "../schema.js";
 
@@ -52,6 +52,37 @@ export async function markUnavailableMediaForRequeue(db: Db, limit = 10_000): Pr
     .select({ id: mediaObjects.id })
     .from(mediaObjects)
     .where(and(eq(mediaObjects.status, "pending"), eq(mediaObjects.error, MEDIA_REQUEUE_MARKER)))
+    .orderBy(asc(mediaObjects.createdAt))
+    .limit(limit);
+  return rows.map((row) => row.id);
+}
+
+/** Prefix of the reason the media job records when a media object used up its attempts. */
+export const MEDIA_RETRIES_EXHAUSTED_PREFIX = "retries_exhausted:";
+/** Marker on voice notes moved back to pending by markExhaustedVoiceForRequeue. */
+export const VOICE_REQUEUE_MARKER = "voice_requeued";
+
+/**
+ * Moves voice notes and audio that failed after using up their attempts (`failed` /
+ * `retries_exhausted:*`, e.g. a transcription model that rejected the language hint) back to pending
+ * (attempts reset). Returns every media object so marked that is still pending, for the caller to
+ * queue `process-media` for each. Idempotent like markLegacyPdfsForRequeue.
+ */
+export async function markExhaustedVoiceForRequeue(db: Db, limit = 10_000): Promise<string[]> {
+  await db
+    .update(mediaObjects)
+    .set({ status: "pending", error: VOICE_REQUEUE_MARKER, attempts: 0, updatedAt: sql`now()` })
+    .where(
+      and(
+        inArray(mediaObjects.kind, ["voice", "audio"]),
+        eq(mediaObjects.status, "failed"),
+        like(mediaObjects.error, `${MEDIA_RETRIES_EXHAUSTED_PREFIX}%`),
+      ),
+    );
+  const rows = await db
+    .select({ id: mediaObjects.id })
+    .from(mediaObjects)
+    .where(and(eq(mediaObjects.status, "pending"), eq(mediaObjects.error, VOICE_REQUEUE_MARKER)))
     .orderBy(asc(mediaObjects.createdAt))
     .limit(limit);
   return rows.map((row) => row.id);

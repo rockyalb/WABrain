@@ -5,12 +5,14 @@
  *   failures [--queue <name>] [--limit <n>] [--json]   list dead-lettered jobs, newest first
  *   retry <failed-job-id>                              move one of them back to its queue
  *   requeue-media                                      retry media OpenWA had no file for (not_found)
+ *   requeue-voice                                      retry voice notes that used up their attempts
  */
 import { createDatabase } from "@wabrain/db";
 import {
   JobQueue,
   jobNames,
   listFailedJobs,
+  requeueExhaustedVoice,
   requeueUnavailableMedia,
   retryFailedJob,
   type FailedJobsReport,
@@ -21,12 +23,13 @@ const USAGE = `Usage (DATABASE_URL must be set):
   operations failures [--queue <name>] [--limit <1-200>] [--json]
   operations retry <failed-job-id>
   operations requeue-media
+  operations requeue-voice
 
 Queues: ${jobNames.join(", ")}
 In the compose bundle: docker compose exec worker node dist/operations.js failures`;
 
 interface Parsed {
-  command: "failures" | "retry" | "requeue-media";
+  command: "failures" | "retry" | "requeue-media" | "requeue-voice";
   id?: string;
   queue?: JobName;
   limit?: number;
@@ -36,7 +39,7 @@ interface Parsed {
 export function parseArgs(argv: readonly string[]): Parsed | null {
   const [command, ...rest] = argv;
   if (command === "retry") return rest.length === 1 && rest[0] ? { command, id: rest[0], json: false } : null;
-  if (command === "requeue-media") return rest.length === 0 ? { command, json: false } : null;
+  if (command === "requeue-media" || command === "requeue-voice") return rest.length === 0 ? { command, json: false } : null;
   if (command !== "failures") return null;
   const parsed: Parsed = { command, json: false };
   for (let index = 0; index < rest.length; index += 1) {
@@ -84,6 +87,15 @@ async function main(): Promise<void> {
     if (args.command === "requeue-media") {
       const count = await requeueUnavailableMedia(database, queue);
       console.log(count ? `Queued ${count} media item(s) OpenWA had no file for; the worker retries them.` : "No media is waiting for a retry.");
+      return;
+    }
+    if (args.command === "requeue-voice") {
+      const count = await requeueExhaustedVoice(database, queue);
+      console.log(
+        count
+          ? `Queued ${count} voice note(s) that used up their attempts; the worker transcribes them and adds what they say to the contacts' facts.`
+          : "No voice note is waiting for a retry.",
+      );
       return;
     }
     const result = await retryFailedJob(database, queue, args.id!);

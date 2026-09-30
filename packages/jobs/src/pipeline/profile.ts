@@ -12,12 +12,17 @@
  *   after batch without the daily limit, leaving part of the text budget for live analysis.
  * - Without a text provider, or over budget, nothing is recorded: profile-sweep queues the chat again
  *   once it can run.
+ *
+ * profile-media covers the one gap: media whose text arrives after the cursor has passed its message
+ * (recovered after a failure). It reads that message with a few neighbours and keeps only facts drawn
+ * from it, without moving the cursor.
  */
 import { extractPersonFacts, suggestChatContext, type ProfileMessageInput } from "@wabrain/agent";
 import {
   applyProposedFacts,
   countPendingMedia,
   getChatRow,
+  getMediaJobContext,
   getPersonRow,
   getProfileProgress,
   getSettings,
@@ -27,7 +32,10 @@ import {
   listChatsNeedingProfile,
   listContexts,
   listProfileBatch,
+  listMessagesAfter,
+  listMessagesBefore,
   listMessagesByIds,
+  profileHasRead,
   recordModelUsage,
   safeNotify,
   saveProfileProgress,
@@ -35,6 +43,7 @@ import {
   suggestChatDefaultContext,
   clearProfileTarget,
   withFacts,
+  type MessageRow,
   type ProfileMessageKey,
 } from "@wabrain/db";
 import { checkBudget, type BudgetCheck } from "./budget.js";
@@ -83,6 +92,20 @@ function overBudget(budget: BudgetCheck, catchUp: boolean): boolean {
   return near(budget.usedTokens, budget.tokenLimit) || near(budget.usedCalls, budget.callLimit);
 }
 
+function toProfileMessage(row: MessageRow): ProfileMessageInput {
+  return {
+    id: row.id,
+    at: row.sentAt,
+    fromOwner: row.fromOwner,
+    fromPerson: !row.fromOwner,
+    senderName: row.senderName,
+    text: row.body,
+    kind: row.kind,
+    derivedText: row.derivedText,
+    language: row.language,
+  };
+}
+
 export async function runChatProfile(deps: PipelineDeps, chatId: string): Promise<ProfileOutcome> {
   const { database } = deps;
   const db = database.db;
@@ -119,17 +142,7 @@ export async function runChatProfile(deps: PipelineDeps, chatId: string): Promis
   const [person] = await withFacts(db, [await getPersonRow(db, chat.personId)]);
   // The model sees the batch in conversation order; the checkpoint follows storage order.
   const ordered = [...batch].sort((a, b) => a.sentAt.getTime() - b.sentAt.getTime() || a.id.localeCompare(b.id));
-  const messages: ProfileMessageInput[] = ordered.map((row) => ({
-    id: row.id,
-    at: row.sentAt,
-    fromOwner: row.fromOwner,
-    fromPerson: !row.fromOwner,
-    senderName: row.senderName,
-    text: row.body,
-    kind: row.kind,
-    derivedText: row.derivedText,
-    language: row.language,
-  }));
+  const messages = ordered.map(toProfileMessage);
 
   const extracted = await extractPersonFacts(state.providers, person!, messages, {
     now,
@@ -204,4 +217,75 @@ export async function sweepProfiles(
   for (const chatId of chatIds) await queue.enqueue("profile-chat", { chatId }, { singletonKey: chatId });
   if (chatIds.length) deps.logger.info("profiles queued", { chats: chatIds.length });
   return chatIds.length;
+}
+
+/** Neighbouring messages read with a recovered media message, for context. */
+export const RECOVERED_CONTEXT_BEFORE = 8;
+export const RECOVERED_CONTEXT_AFTER = 4;
+
+export type RecoveredMediaOutcome =
+  | { status: "skipped"; reason: "missing" | "no_text" | "chat_off" | "not_direct" | "not_yet_read" | "no_provider" }
+  | { status: "deferred"; until: Date }
+  | { status: "profiled"; facts: number };
+
+/**
+ * profile-media: facts from one media object that finished after profile-chat had already read past
+ * its message. Reads the message with its neighbours, keeps only facts that cite it, and leaves the
+ * cursor, the daily claim and the chat's tasks alone. Over the catch-up share of the text budget it
+ * waits for the reset.
+ */
+export async function profileRecoveredMedia(deps: PipelineDeps, mediaObjectId: string): Promise<RecoveredMediaOutcome> {
+  const { database } = deps;
+  const db = database.db;
+  const ctx = await getMediaJobContext(db, mediaObjectId);
+  if (!ctx) return { status: "skipped", reason: "missing" };
+  const target = ctx.message;
+  if (ctx.media.status !== "done" || !target.derivedText?.trim()) return { status: "skipped", reason: "no_text" };
+  const chat = await getChatRow(db, ctx.chat.id).catch(() => null);
+  if (!chat) return { status: "skipped", reason: "missing" };
+  if (chat.mode === "off") return { status: "skipped", reason: "chat_off" };
+  if (chat.isGroup || !chat.personId) return { status: "skipped", reason: "not_direct" };
+  // Not read yet: profile-chat will read it with its text like any other message.
+  if (!(await profileHasRead(db, chat.id, { createdAt: target.createdAt, messageId: target.id }))) {
+    return { status: "skipped", reason: "not_yet_read" };
+  }
+
+  const now = deps.now();
+  const state = await deps.providers.load();
+  if (!state.providers) return { status: "skipped", reason: "no_provider" };
+  const budget = await checkBudget(database, "text", state.limits.text, now);
+  if (overBudget(budget, true)) {
+    await deps.queue.enqueue("profile-media", { mediaObjectId }, { singletonKey: mediaObjectId, startAfter: budget.resetAt });
+    return { status: "deferred", until: budget.resetAt };
+  }
+
+  const settings = await getSettings(db);
+  const [before, after] = await Promise.all([
+    listMessagesBefore(db, chat.id, target.sentAt, [target.id], RECOVERED_CONTEXT_BEFORE),
+    listMessagesAfter(db, chat.id, target.sentAt, [target.id], RECOVERED_CONTEXT_AFTER),
+  ]);
+  const [person] = await withFacts(db, [await getPersonRow(db, chat.personId)]);
+  const extracted = await extractPersonFacts(state.providers, person!, [...before, target, ...after].map(toProfileMessage), {
+    now,
+    timezone: settings.timezone,
+    abortSignal: AbortSignal.timeout(deps.config.modelTimeoutMs),
+    maxRetries: 1,
+  });
+  if (extracted.run) {
+    await recordModelUsage(db, {
+      role: "text",
+      purpose: "profile",
+      provider: extracted.run.provider,
+      model: extracted.run.modelId,
+      inputTokens: extracted.run.inputTokens,
+      outputTokens: extracted.run.outputTokens,
+      refId: chat.id,
+    });
+  }
+  // The neighbours were read before; only what the recovered text says is new.
+  const fromTarget = extracted.facts.filter((fact) => fact.sourceMessageIds.includes(target.id));
+  const facts = fromTarget.length ? await database.transaction(({ db: tx }) => applyProposedFacts(tx, person!.id, fromTarget)) : 0;
+  if (facts > 0) await safeNotify(deps.notifier, { type: "sync" });
+  deps.logger.info("recovered media profiled", { chatId: chat.id, mediaObjectId, facts });
+  return { status: "profiled", facts };
 }

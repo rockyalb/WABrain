@@ -22,8 +22,10 @@ import {
   finishMediaObject,
   getMediaJobContext,
   getPersonRow,
+  markExhaustedVoiceForRequeue,
   markLegacyPdfsForRequeue,
   markUnavailableMediaForRequeue,
+  profileHasRead,
   recordModelUsage,
   releaseMediaObject,
   type MediaJobContext,
@@ -358,6 +360,10 @@ export async function processMedia(deps: PipelineDeps, mediaObjectId: string): P
         setMessageLanguage: !ctx.message.body.trim(),
       }),
     );
+    // Recovered after profile-chat read past the message: its text reaches the person's facts separately.
+    if (result.text.trim() && ctx.chat.personId && (await profileHasRead(database.db, ctx.chat.id, { createdAt: ctx.message.createdAt, messageId: ctx.message.id }))) {
+      await deps.queue.enqueue("profile-media", { mediaObjectId }, { singletonKey: mediaObjectId });
+    }
     deps.logger.info("media analyzed", { mediaObjectId, kind: ctx.media.kind, deduped: Boolean(previous?.derivedText) });
     return { status: "done", deduped: Boolean(previous?.derivedText) };
   } catch (error) {
@@ -403,6 +409,17 @@ export async function requeueLegacyPdfs(deps: Pick<PipelineDeps, "database" | "l
  */
 export async function requeueUnavailableMedia(database: Pick<PipelineDeps["database"], "db">, queue: Pick<PipelineDeps["queue"], "enqueue">): Promise<number> {
   const ids = await markUnavailableMediaForRequeue(database.db);
+  for (const mediaObjectId of ids) await queue.enqueue("process-media", { mediaObjectId }, { singletonKey: mediaObjectId });
+  return ids.length;
+}
+
+/**
+ * Operator command: re-queues voice notes and audio that used up their attempts (see
+ * markExhaustedVoiceForRequeue), e.g. after a transcription fix. Ones whose chat profile already read
+ * past them are profiled again when they finish (profile-media). Returns how many are queued.
+ */
+export async function requeueExhaustedVoice(database: Pick<PipelineDeps["database"], "db">, queue: Pick<PipelineDeps["queue"], "enqueue">): Promise<number> {
+  const ids = await markExhaustedVoiceForRequeue(database.db);
   for (const mediaObjectId of ids) await queue.enqueue("process-media", { mediaObjectId }, { singletonKey: mediaObjectId });
   return ids.length;
 }

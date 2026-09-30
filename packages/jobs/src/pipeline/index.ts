@@ -15,7 +15,7 @@ import { runChatEmbedding, sweepEmbeddings } from "./embeddings.js";
 import { syncContacts } from "./contacts.js";
 import { processMedia } from "./media.js";
 import { runNotificationTick } from "./notifications.js";
-import { runChatProfile, sweepProfiles } from "./profile.js";
+import { profileRecoveredMedia, runChatProfile, sweepProfiles } from "./profile.js";
 
 export interface BuildPipelineOptions {
   database: Database;
@@ -78,7 +78,7 @@ export async function buildPipeline(options: BuildPipelineOptions): Promise<Pipe
   };
 }
 
-const HANDLERS = ["analyze-chat", "process-media", "profile-chat", "profile-sweep", "notify-tick", "embed-chat", "embed-sweep", "sync-contacts"] as const;
+const HANDLERS = ["analyze-chat", "process-media", "profile-chat", "profile-media", "profile-sweep", "notify-tick", "embed-chat", "embed-sweep", "sync-contacts"] as const;
 
 /**
  * Registers the pipeline handlers, the per-minute notification tick, the 10-minute profile sweep,
@@ -105,6 +105,14 @@ export async function registerPipeline(queue: JobQueue, deps: PipelineDeps, opti
     async ({ chatId }) => {
       const outcome = await runChatProfile(deps, chatId);
       if (outcome.status === "skipped") deps.logger.info("profile skipped", { chatId, reason: outcome.reason });
+    },
+    { concurrency: 1, pollingIntervalSeconds: 5 },
+  );
+  await queue.work(
+    "profile-media",
+    async ({ mediaObjectId }) => {
+      const outcome = await profileRecoveredMedia(deps, mediaObjectId);
+      if (outcome.status === "skipped") deps.logger.info("recovered media not profiled", { mediaObjectId, reason: outcome.reason });
     },
     { concurrency: 1, pollingIntervalSeconds: 5 },
   );

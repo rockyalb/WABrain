@@ -2,12 +2,12 @@ import type { Providers } from "@wabrain/agent";
 import { createMockProviders, scriptedJsonModel } from "@wabrain/agent/testing";
 import { TaskService, completeMediaObject, getProfileProgress, newId, requestProfileCatchUp, schema } from "@wabrain/db";
 import { createTestDatabase, type TestDatabase } from "@wabrain/db/testing";
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { ProvidersState } from "../providers.js";
 import { defaultPipelineConfig } from "./config.js";
 import type { PipelineDeps } from "./deps.js";
-import { PROFILE_BATCH_MESSAGES, runChatProfile, sweepProfiles } from "./profile.js";
+import { PROFILE_BATCH_MESSAGES, profileRecoveredMedia, runChatProfile, sweepProfiles } from "./profile.js";
 
 const silent = { info() {}, warn() {}, error() {} };
 const nolimit = { dailyTokenLimit: null, dailyCallLimit: null };
@@ -152,7 +152,7 @@ describe("profile-chat over imported history", () => {
     expect(progress.target).toBeNull();
     expect(progress.cursor).not.toBeNull();
     // Once caught up, the daily limit applies again: a new message waits for the next day's run.
-    await addMessages(chatId, ["Faleminderit"], { startMinutes: 20_000 });
+    await addMessages(chatId, ["Thanks"], { startMinutes: 20_000 });
     expect(await runChatProfile(h.deps, chatId)).toEqual({ status: "skipped", reason: "already_today" });
     expect(seen).toHaveLength(3);
     const dayLater = (days: number) => ({ ...h.deps, now: () => new Date(Date.now() + days * 86_400_000) });
@@ -272,6 +272,82 @@ describe("profile-chat over imported history", () => {
     const live = await makeDirectChat();
     await addMessages(live.chatId, ["See you tomorrow"]);
     expect(await runChatProfile(h.deps, live.chatId)).toMatchObject({ status: "profiled", messages: 1, more: false });
+    await db.delete(schema.modelUsage).where(eq(schema.modelUsage.purpose, "analysis"));
+  });
+});
+
+describe("profile-media for media recovered after the profile read past it", () => {
+  /** A voice note without text yet, with a media row in `status`. */
+  async function addVoiceNote(chatId: string, status: "failed" | "pending", startMinutes: number) {
+    const [messageId] = await addMessages(chatId, [""], { startMinutes });
+    await testDb.database.db.update(schema.messages).set({ kind: "voice" }).where(eq(schema.messages.id, messageId!));
+    const mediaId = newId();
+    await testDb.database.db
+      .insert(schema.mediaObjects)
+      .values({ id: mediaId, messageId: messageId!, kind: "voice", status, error: status === "failed" ? "retries_exhausted:AI_APICallError" : null });
+    return { messageId: messageId!, mediaId };
+  }
+
+  const transcribed = (voice: { messageId: string; mediaId: string }, text: string) =>
+    completeMediaObject(testDb.database.db, { id: voice.mediaId, messageId: voice.messageId, derivedText: text, language: "en", contentSha256: `digest-${voice.mediaId}`, sizeBytes: 64, setMessageLanguage: true });
+
+  it("adds the facts a recovered voice note gives, reading its neighbours, without moving the cursor", async () => {
+    const { chatId, personId } = await makeDirectChat();
+    const [first] = await addMessages(chatId, ["Good morning"]);
+    const voice = await addVoiceNote(chatId, "failed", 1);
+    const [last] = await addMessages(chatId, ["Thanks"], { startMinutes: 2 });
+    const seen: string[][] = [];
+    const h = harness(createMockProviders({ text: factModel(seen) }));
+    // The daily run reads past the failed voice note, which has no text yet.
+    expect(await runChatProfile(h.deps, chatId)).toMatchObject({ status: "profiled", facts: 0, messages: 3 });
+    const progress = await getProfileProgress(testDb.database.db, chatId);
+
+    await transcribed(voice, "I am a civil engineer");
+    expect(await profileRecoveredMedia(h.deps, voice.mediaId)).toEqual({ status: "profiled", facts: 1 });
+    expect(seen.at(-1)).toEqual([first, voice.messageId, last]);
+    expect(await factsOf(personId)).toEqual([expect.objectContaining({ key: "role", value: "engineer", sourceMessageIds: [voice.messageId] })]);
+    expect(await getProfileProgress(testDb.database.db, chatId)).toEqual(progress);
+    expect(h.enqueued).toEqual([]);
+  });
+
+  it("keeps only facts that cite the recovered message", async () => {
+    const { chatId, personId } = await makeDirectChat();
+    await addMessages(chatId, ["I am an engineer"]);
+    const voice = await addVoiceNote(chatId, "failed", 1);
+    const h = harness(createMockProviders({ text: factModel([]) }));
+    expect(await runChatProfile(h.deps, chatId)).toMatchObject({ status: "profiled", facts: 1 });
+    const before = await factsOf(personId);
+
+    // The model finds the fact again in the neighbour; the voice note itself says nothing new.
+    await transcribed(voice, "I'm coming tomorrow");
+    expect(await profileRecoveredMedia(h.deps, voice.mediaId)).toEqual({ status: "profiled", facts: 0 });
+    expect(await factsOf(personId)).toEqual(before);
+  });
+
+  it("leaves media the profile has not read yet to profile-chat, and waits over the catch-up budget", async () => {
+    const { chatId } = await makeDirectChat();
+    const unread = await addVoiceNote(chatId, "pending", 0);
+    await transcribed(unread, "I am an engineer");
+    const seen: string[][] = [];
+    const h = harness(createMockProviders({ text: factModel(seen) }));
+    expect(await profileRecoveredMedia(h.deps, unread.mediaId)).toEqual({ status: "skipped", reason: "not_yet_read" });
+    expect(await profileRecoveredMedia(h.deps, newId())).toEqual({ status: "skipped", reason: "missing" });
+
+    expect(await runChatProfile(h.deps, chatId)).toMatchObject({ status: "profiled", facts: 1 });
+    const later = await addVoiceNote(chatId, "failed", 1);
+    await testDb.database.db.update(schema.chatPipelineState).set({ profileCursorCreatedAt: new Date(Date.now() + 60_000), profileCursorMessageId: later.messageId }).where(eq(schema.chatPipelineState.chatId, chatId));
+    await transcribed(later, "I live in Bristol");
+    // 850 of 1,000 calls used today: over the catch-up share (80%), under the limit, so it waits for the reset.
+    const { db } = testDb.database;
+    const [usage] = await db.execute<{ used: number }>(sql`select count(*)::int as used from model_usage where role = 'text'`);
+    await db.insert(schema.modelUsage).values(
+      Array.from({ length: 850 - usage!.used }, () => ({ id: newId(), role: "text" as const, purpose: "analysis", provider: "mock", model: "m", inputTokens: 1, outputTokens: 1 })),
+    );
+    const limited = harness(createMockProviders({ text: factModel(seen) }), { text: { dailyTokenLimit: null, dailyCallLimit: 1_000 } });
+    const calls = seen.length;
+    expect(await profileRecoveredMedia(limited.deps, later.mediaId)).toMatchObject({ status: "deferred", until: expect.any(Date) });
+    expect(limited.enqueued).toEqual(["profile-media:"]);
+    expect(seen).toHaveLength(calls);
     await db.delete(schema.modelUsage).where(eq(schema.modelUsage.purpose, "analysis"));
   });
 });

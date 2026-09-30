@@ -520,6 +520,19 @@ detailed error, search its log for `job failed` near the failure time. The log
 line has the queue and job id and may contain provider text, so treat logs as
 sensitive.
 
+Media that uses up its attempts is marked `failed` on its row instead of being
+dead-lettered. After fixing the cause of failed voice notes (for example a
+transcription model that rejected the language hint), queue all of them again:
+
+```bash
+dc exec worker node dist/operations.js requeue-voice
+```
+
+The worker transcribes them again. When a chat's profile had already read past
+a voice note, a `profile-media` job then reads the new transcript with a few
+messages around it and adds the facts it gives about the person. It never
+creates tasks from these old messages.
+
 On Railway, run the same commands in the worker or API service's shell, for
 example `railway ssh --service worker node dist/operations.js failures`. Both
 images include `dist/operations.js`. During development, use

@@ -77,7 +77,7 @@ describe("transcribeAudio", () => {
       if (form.get("language") === "es") {
         const error = {
           error: {
-            message: "Language code 'sq' is not recognized. Try adding the language name to your prompt.",
+            message: "Language code 'es' is not recognized. Try adding the language name to your prompt.",
             type: "invalid_request_error",
             param: "language",
             code: "unsupported_language",

@@ -61,6 +61,17 @@ export const jobs = {
     expireInSeconds: 600,
   }),
   /**
+   * Person facts from one media object whose text arrived after profile-chat had already read past its
+   * message (a voice note, image or PDF recovered after a failure). Facts only: never tasks.
+   */
+  "profile-media": define("profile-media", z.object({ mediaObjectId: z.string().min(1) }), "stately", {
+    retryLimit: 3,
+    retryDelay: 60,
+    retryBackoff: true,
+    retryDelayMax: 3600,
+    expireInSeconds: 600,
+  }),
+  /**
    * Every 10 minutes: queue profile-chat for direct chats with unread messages that may run now
    * (deferred for a missing provider or the budget, failed, or imported history catching up).
    */
