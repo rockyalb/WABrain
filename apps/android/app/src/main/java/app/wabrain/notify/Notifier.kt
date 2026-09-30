@@ -109,7 +109,7 @@ object Notifier {
             .setPublicVersion(publicVersion)
             .setGroup(GROUP_REVIEW)
             .setAutoCancel(true)
-            .setContentIntent(openIntent(context, id, MainActivity.EXTRA_REVIEW_ID, payload.reviewItemId))
+            .setContentIntent(activityIntent(context, id, MainActivity.reviewIntent(context, payload.reviewItemId)))
             .addAction(0, acceptLabel, ReviewActionReceiver.pendingIntent(context, payload.reviewItemId, accept = true, notificationId = id))
             .addAction(0, rejectLabel, ReviewActionReceiver.pendingIntent(context, payload.reviewItemId, accept = false, notificationId = id))
             .build()
@@ -157,7 +157,7 @@ object Notifier {
             .setGroupSummary(true)
             .setGroupAlertBehavior(NotificationCompat.GROUP_ALERT_CHILDREN)
             .setAutoCancel(true)
-            .setContentIntent(openIntent(context, SUMMARY_ID_REVIEW, null, null))
+            .setContentIntent(activityIntent(context, SUMMARY_ID_REVIEW, MainActivity.reviewTabIntent(context)))
             .build()
         post(context, SUMMARY_ID_REVIEW, notification)
     }
@@ -178,7 +178,7 @@ object Notifier {
             .setPublicVersion(publicVersion)
             .setGroup(GROUP_REMINDERS)
             .setAutoCancel(true)
-            .setContentIntent(openIntent(context, id, MainActivity.EXTRA_TASK_ID, payload.taskId))
+            .setContentIntent(activityIntent(context, id, MainActivity.taskIntent(context, payload.taskId)))
             .build()
         val posted = post(context, id, notification)
         if (posted) postGroupSummary(context, CHANNEL_REMINDERS, GROUP_REMINDERS, SUMMARY_ID_REMINDERS, R.string.notification_public_reminder)
@@ -198,7 +198,7 @@ object Notifier {
             .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
             .setPublicVersion(publicVersion)
             .setAutoCancel(true)
-            .setContentIntent(openIntent(context, DAILY_SUMMARY_ID, null, null))
+            .setContentIntent(activityIntent(context, DAILY_SUMMARY_ID, MainActivity.openIntent(context)))
             .build()
         return post(context, DAILY_SUMMARY_ID, notification)
     }
@@ -215,11 +215,8 @@ object Notifier {
         post(context, id, notification)
     }
 
-    private fun openIntent(context: Context, requestCode: Int, extraKey: String?, extraValue: String?): PendingIntent {
-        val intent = Intent(context, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
-            if (extraKey != null) putExtra(extraKey, extraValue)
-        }
+    private fun activityIntent(context: Context, requestCode: Int, intent: Intent): PendingIntent {
+        intent.addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
         return PendingIntent.getActivity(context, requestCode, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
     }
 

@@ -17,11 +17,17 @@ async function acknowledge(id) {
   });
 }
 
+function reviewTarget(reviewItemId) {
+  return reviewItemId ? `/#/tasks/review?item=${encodeURIComponent(reviewItemId)}` : "/#/tasks/review";
+}
+
 async function showPayload(payload) {
   if (!payload || !["review", "reminder", "summary"].includes(payload.type)) return;
   const review = payload.type === "review";
   const confirmation = ["possibly_done", "possibly_cancelled"].includes(payload.reviewType);
-  const target = review ? "/#/tasks/review" : payload.type === "reminder" ? `/#/tasks/${encodeURIComponent(payload.taskId)}` : "/#/tasks";
+  const target = review
+    ? reviewTarget(payload.reviewItemId)
+    : payload.type === "reminder" ? `/#/tasks/${encodeURIComponent(payload.taskId)}` : "/#/tasks";
   await self.registration.showNotification(
     review ? "Review needed" : payload.type === "reminder" ? "Task reminder" : "Daily summary",
     {
@@ -76,7 +82,7 @@ self.addEventListener("notificationclick", (event) => {
           headers: { "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
           body: "{}",
         });
-        if (!response.ok && response.status !== 409) throw new Error(`Decision failed: ${response.status}`);
+        if (!response.ok) throw new Error(`Decision failed: ${response.status}`);
         event.notification.close();
         await notifyWindows();
         return;
@@ -85,6 +91,6 @@ self.addEventListener("notificationclick", (event) => {
       }
     }
     event.notification.close();
-    await openWorkspace(data.target);
+    await openWorkspace(data.reviewItemId ? reviewTarget(data.reviewItemId) : data.target);
   })());
 });

@@ -1,15 +1,10 @@
 package app.wabrain.ui.tasks
 
 import androidx.compose.animation.animateColorAsState
-import androidx.compose.animation.core.Animatable
-import androidx.compose.animation.core.animateFloatAsState
-import androidx.compose.animation.core.spring
-import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
@@ -46,17 +41,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.draw.drawBehind
-import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.StrokeCap
-import androidx.compose.ui.graphics.drawscope.Stroke
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
@@ -102,6 +92,7 @@ import java.util.Locale
 fun TasksScreen(
     container: AppContainer,
     initialTab: Int,
+    initialReviewItemId: String? = null,
     onOpenTask: (String) -> Unit,
     onOpenConversation: (String, String?) -> Unit,
     onOpenAsk: () -> Unit,
@@ -110,6 +101,7 @@ fun TasksScreen(
     val state by vm.state.collectAsStateWithLifecycle()
     val refreshing by vm.refreshing.collectAsStateWithLifecycle()
     val error by vm.error.collectAsStateWithLifecycle()
+    val reviewTarget by vm.reviewTarget.collectAsStateWithLifecycle()
     var tab by rememberSaveable(initialTab) { mutableStateOf(initialTab) }
     var showCreate by remember { mutableStateOf(false) }
     val snackbar = remember { SnackbarHostState() }
@@ -129,17 +121,14 @@ fun TasksScreen(
     }
 
     val today = remember(state.now, state.zone) { state.now.atZone(state.zone).toLocalDate() }
-    val doneToday = state.recentlyClosed.count { t ->
-        t.status == "done" && t.closedAt?.let { Instant.ofEpochMilli(it).atZone(state.zone).toLocalDate() == today } == true
-    }
-
     Scaffold(
         containerColor = Color.Transparent,
         topBar = {
             TasksHeader(
                 date = remember(today) { today.format(DateTimeFormatter.ofPattern("EEEE d MMM", Locale.getDefault())) },
                 openCount = state.today.size,
-                doneToday = doneToday,
+                completedToday = state.completedToday,
+                createdToday = state.createdToday,
                 showProgress = state.loaded,
                 onRefresh = vm::refresh,
             )
@@ -175,6 +164,8 @@ fun TasksScreen(
                         },
                         onOpenTask = onOpenTask,
                         onOpenConversation = onOpenConversation,
+                        targetItemId = initialReviewItemId,
+                        targetState = reviewTarget,
                     )
                     tab == TaskTabs.CLOSED -> ClosedTaskList(state.recentlyClosed, state.chats, state.people, formatter, onOpenTask)
                     else -> {
@@ -216,11 +207,14 @@ fun TasksScreen(
     }
 
     LaunchedEffect(Unit) { vm.refresh() }
+    LaunchedEffect(initialReviewItemId) {
+        initialReviewItemId?.let(vm::resolveReviewTarget)
+    }
 }
 
-/** Logo, title, today's date and open count, and a ring for what's done today. */
+/** Logo, title, date and the independent completed/created counts for today. */
 @Composable
-private fun TasksHeader(date: String, openCount: Int, doneToday: Int, showProgress: Boolean, onRefresh: () -> Unit) {
+private fun TasksHeader(date: String, openCount: Int, completedToday: Int, createdToday: Int, showProgress: Boolean, onRefresh: () -> Unit) {
     Row(
         Modifier
             .fillMaxWidth()
@@ -240,8 +234,7 @@ private fun TasksHeader(date: String, openCount: Int, doneToday: Int, showProgre
                 overflow = TextOverflow.Ellipsis,
             )
         }
-        val total = openCount + doneToday
-        if (showProgress && total > 0) ProgressRing(doneToday, total)
+        if (showProgress && (completedToday > 0 || createdToday > 0)) DailyActivity(completedToday, createdToday)
         IconButton(onClick = onRefresh) {
             Icon(WabIcons.Refresh, stringResource(R.string.action_refresh), tint = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -249,37 +242,21 @@ private fun TasksHeader(date: String, openCount: Int, doneToday: Int, showProgre
 }
 
 @Composable
-private fun ProgressRing(done: Int, total: Int) {
-    val g = LocalGlass.current
-    val sweep by animateFloatAsState(done.toFloat() / total, spring(dampingRatio = 0.55f, stiffness = 180f), label = "ring")
-    val pop = remember { Animatable(1f) }
-    var lastDone by remember { mutableStateOf(done) }
-    LaunchedEffect(done) {
-        if (done > lastDone) {
-            pop.animateTo(1.16f, tween(130))
-            pop.animateTo(1f, spring(dampingRatio = 0.35f, stiffness = 400f))
-        }
-        lastDone = done
-    }
-    val description = stringResource(R.string.tasks_progress, done, total)
-    Box(
+private fun DailyActivity(completedToday: Int, createdToday: Int) {
+    val description = stringResource(R.string.tasks_activity_description, completedToday, createdToday)
+    Column(
         Modifier
-            .size(44.dp)
-            .graphicsLayer {
-                scaleX = pop.value
-                scaleY = pop.value
-            }
-            .semantics { contentDescription = description }
-            .drawBehind {
-                val w = 3.5.dp.toPx()
-                val inset = w / 2f + 2.dp.toPx()
-                val arcSize = Size(size.width - inset * 2, size.height - inset * 2)
-                drawArc(g.accent.copy(alpha = 0.18f), 0f, 360f, false, Offset(inset, inset), arcSize, style = Stroke(w))
-                drawArc(g.accent, -90f, 360f * sweep.coerceIn(0f, 1f), false, Offset(inset, inset), arcSize, style = Stroke(w, cap = StrokeCap.Round))
-            },
-        contentAlignment = Alignment.Center,
+            .padding(horizontal = 4.dp)
+            .clearAndSetSemantics { contentDescription = description },
+        horizontalAlignment = Alignment.End,
     ) {
-        Text("$done/$total", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+        Text("$completedToday / $createdToday", style = MaterialTheme.typography.labelLarge, fontWeight = FontWeight.Bold)
+        Text(
+            stringResource(R.string.tasks_activity_caption),
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            maxLines = 1,
+        )
     }
 }
 

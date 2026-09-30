@@ -222,6 +222,13 @@
     <string name="review_type_reschedule">Reschedule?</string>
     <string name="review_type_unknown">Review</string>
     <string name="review_view_message">View message</string>
+    <string name="review_target_loading">Opening this review…</string>
+    <string name="review_target_queued">Your decision is waiting to sync.</string>
+    <string name="review_target_accepted">This review was already accepted on another device.</string>
+    <string name="review_target_rejected">This review was already rejected on another device.</string>
+    <string name="review_target_missing">This review is no longer waiting. It may already have been handled.</string>
+    <string name="review_target_unavailable">This review could not be checked. Pull down to try syncing again.</string>
+    <string name="review_target_open_task">Open resulting task</string>
     <string name="search">Search</string>
     <string name="settings_about">About and privacy</string>
     <string name="settings_add_context">Add context</string>
@@ -267,7 +274,8 @@
     <string name="tab_waiting">Waiting on</string>
     <string name="task_complete_label">Complete: %1$s</string>
     <string name="task_completed_snackbar">Task completed</string>
-    <string name="tasks_progress">%1$d of %2$d done today</string>
+    <string name="tasks_activity_caption">done / created today</string>
+    <string name="tasks_activity_description">%1$d completed today, %2$d created today</string>
     <string name="task_context">Context</string>
     <string name="task_context_override">Context (override)</string>
     <string name="task_description">Description</string>

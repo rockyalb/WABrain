@@ -666,7 +666,7 @@ describe("reminders and daily summary", () => {
     await service.updateTask(task.id, { dueAt: "2026-09-24T17:00:00Z" });
     expect((await runNotificationTick(h.deps, at("2026-09-24T16:30:00Z"))).reminders).toBe(0);
 
-    // Summary: 08:00 Tirane on 2026-09-25 = 06:00Z.
+    // Summary: 08:00 Rome on 2026-09-25 = 06:00Z.
     h.pushes.length = 0;
     expect((await runNotificationTick(h.deps, at("2026-09-25T05:59:00Z"))).summary).toBe(false);
     expect((await runNotificationTick(h.deps, at("2026-09-25T06:00:30Z"))).summary).toBe(true);

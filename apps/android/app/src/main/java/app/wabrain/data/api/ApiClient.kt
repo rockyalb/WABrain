@@ -100,6 +100,10 @@ class ApiClient(
 
     // ---------------------------------------------------------------- review / messages
 
+    /** A pending or decided review item, including the task produced by its decision when available. */
+    suspend fun review(id: String): ReviewDecisionResponse =
+        get(path("v1", "review", id), ReviewDecisionResponse.serializer())
+
     suspend fun messagesAround(chatId: String, messageId: String?, before: Int = 20, after: Int = 20): MessagesResponse =
         get(
             path("v1", "chats", chatId, "messages"),
@@ -277,4 +281,3 @@ class ApiClient(
         }
     }
 }
-

@@ -39,7 +39,8 @@ export const PageQuerySchema = z.object({
 // Tasks --------------------------------------------------------------------
 
 export const TaskListQuerySchema = PageQuerySchema.extend({
-  status: TaskStatusSchema.optional(),
+  /** "closed" lists done and cancelled tasks together, newest closed first. */
+  status: z.union([TaskStatusSchema, z.literal("closed")]).optional(),
   kind: TaskKindSchema.optional(),
   contextId: Id.optional(),
   chatId: Id.optional(),

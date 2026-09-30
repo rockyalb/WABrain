@@ -1,5 +1,8 @@
 package app.wabrain.ui.tasks
 
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -8,7 +11,8 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.MaterialTheme
@@ -17,6 +21,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -54,19 +59,69 @@ fun ReviewList(
     onAcceptClosed: (String, String) -> Unit,
     onOpenTask: (String) -> Unit,
     onOpenConversation: (String, String?) -> Unit,
+    targetItemId: String? = null,
+    targetState: ReviewTargetState = ReviewTargetState.None,
 ) {
-    if (cards.isEmpty()) {
+    if (cards.isEmpty() && targetState == ReviewTargetState.None) {
         EmptyState(stringResource(R.string.empty_review))
         return
     }
     var editing by remember { mutableStateOf<ReviewCard?>(null) }
+    val listState = rememberLazyListState()
+    val targetIndex = cards.indexOfFirst { it.item.id == targetItemId }
+    val targetNoticeBeforeCards = targetState is ReviewTargetState.Loading ||
+        targetState is ReviewTargetState.Queued ||
+        targetState is ReviewTargetState.Handled ||
+        targetState is ReviewTargetState.Missing ||
+        targetState is ReviewTargetState.Unavailable
+    LaunchedEffect(targetItemId, targetIndex, targetNoticeBeforeCards) {
+        if (targetIndex >= 0) listState.animateScrollToItem(targetIndex + if (targetNoticeBeforeCards) 1 else 0)
+    }
     LazyColumn(
         Modifier.fillMaxSize(),
+        state = listState,
         contentPadding = PaddingValues(16.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
     ) {
-        items(cards, key = { it.item.id }) { card ->
-            ReviewCardView(card, state, formatter, onDecide, onAcceptClosed, onEdit = { editing = card }, onOpenTask, onOpenConversation)
+        when (val target = targetState) {
+            is ReviewTargetState.Loading -> item(key = "review-target-loading") {
+                ReviewTargetNotice(stringResource(R.string.review_target_loading))
+            }
+            is ReviewTargetState.Handled -> item(key = "review-target-handled") {
+                ReviewTargetNotice(
+                    message = stringResource(
+                        if (target.decision == "rejected") R.string.review_target_rejected else R.string.review_target_accepted,
+                    ),
+                    taskTitle = target.taskTitle,
+                    onOpenTask = target.taskId?.let { id -> { onOpenTask(id) } },
+                )
+            }
+            is ReviewTargetState.Queued -> item(key = "review-target-queued") {
+                ReviewTargetNotice(stringResource(R.string.review_target_queued))
+            }
+            is ReviewTargetState.Missing -> item(key = "review-target-missing") {
+                ReviewTargetNotice(stringResource(R.string.review_target_missing))
+            }
+            is ReviewTargetState.Unavailable -> item(key = "review-target-unavailable") {
+                ReviewTargetNotice(stringResource(R.string.review_target_unavailable))
+            }
+            ReviewTargetState.None, is ReviewTargetState.Pending -> Unit
+        }
+        if (cards.isEmpty() && targetState is ReviewTargetState.Pending) {
+            item(key = "review-target-waiting") { ReviewTargetNotice(stringResource(R.string.review_target_loading)) }
+        }
+        itemsIndexed(cards, key = { _, card -> card.item.id }) { _, card ->
+            ReviewCardView(
+                card,
+                state,
+                formatter,
+                onDecide,
+                onAcceptClosed,
+                onEdit = { editing = card },
+                onOpenTask,
+                onOpenConversation,
+                highlighted = card.item.id == targetItemId,
+            )
         }
     }
     editing?.let { card ->
@@ -123,12 +178,21 @@ private fun ReviewCardView(
     onEdit: () -> Unit,
     onOpenTask: (String) -> Unit,
     onOpenConversation: (String, String?) -> Unit,
+    highlighted: Boolean = false,
 ) {
     val type = card.item.reviewType
     val action = card.action
     // A later message suggests this proposal was already dealt with before it was reviewed.
     val handled = if (type == ReviewItemType.CREATE) card.item.handled else null
-    Card(Modifier.fillMaxWidth()) {
+    val borderColor by animateColorAsState(
+        if (highlighted) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(350),
+        label = "review target border",
+    )
+    Card(
+        Modifier.fillMaxWidth(),
+        border = BorderStroke(if (highlighted) 2.dp else 1.dp, borderColor),
+    ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             BadgeRow {
                 Badge(stringResource(reviewTypeLabel(type)))
@@ -185,6 +249,29 @@ private fun ReviewCardView(
                         OutlinedButton(onClick = onEdit) { Text(stringResource(R.string.action_edit)) }
                     }
                     OutlinedButton(onClick = { onDecide(card.item.id, false, null) }) { Text(stringResource(R.string.action_reject)) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun ReviewTargetNotice(
+    message: String,
+    taskTitle: String? = null,
+    onOpenTask: (() -> Unit)? = null,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.secondaryContainer,
+        contentColor = MaterialTheme.colorScheme.onSecondaryContainer,
+        shape = MaterialTheme.shapes.medium,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            Text(message, style = MaterialTheme.typography.bodyMedium)
+            if (onOpenTask != null) {
+                TextButton(onClick = onOpenTask, contentPadding = PaddingValues(0.dp)) {
+                    Text(taskTitle?.let { stringResource(R.string.review_task_link, it) } ?: stringResource(R.string.review_target_open_task))
                 }
             }
         }

@@ -11,6 +11,20 @@ export interface Snapshot {
   settings: Settings;
 }
 
+export interface SyncDeleted {
+  tasks: string[];
+  reviewItems: string[];
+  contexts: string[];
+  chats: string[];
+  people: string[];
+}
+
+export interface SyncResponse extends Snapshot {
+  cursor: string;
+  full: boolean;
+  deleted: SyncDeleted;
+}
+
 export interface TaskDetail { task: Task; events: TaskEvent[]; evidence: MessageView[] }
 export interface PersonDetail extends Person { facts: Person["facts"] }
 
@@ -31,7 +45,7 @@ export function displayTime(value: string | null, settings?: Settings): string {
   }).format(new Date(value));
 }
 
-export function dateKey(value: string | null, settings: Settings): string | null {
+export function dateKey(value: string | null, settings: Pick<Settings, "timezone">): string | null {
   if (!value) return null;
   const parts = new Intl.DateTimeFormat("en-US", {
     timeZone: settings.timezone,
@@ -43,6 +57,23 @@ export function dateKey(value: string | null, settings: Settings): string | null
 
 export function todayKey(settings: Settings): string {
   return dateKey(new Date().toISOString(), settings)!;
+}
+
+/** Independent daily activity counts; completed tasks may have been created on an earlier day. */
+export function taskActivityToday(tasks: Task[], settings: Pick<Settings, "timezone">, now = new Date()): { completed: number; created: number } {
+  const today = dateKey(now.toISOString(), settings);
+  return {
+    completed: tasks.filter((task) => task.status === "done" && dateKey(task.closedAt, settings) === today).length,
+    created: tasks.filter((task) => dateKey(task.createdAt, settings) === today).length,
+  };
+}
+
+/** Whether a task closed today or yesterday, in the saved timezone. Closed tasks without a time count as recent. */
+export function closedRecently(task: Pick<Task, "closedAt">, settings: Pick<Settings, "timezone">, now = new Date()): boolean {
+  const key = dateKey(task.closedAt, settings);
+  if (key === null) return true;
+  const yesterday = dateKey(new Date(now.getTime() - 86_400_000).toISOString(), settings)!;
+  return key >= yesterday;
 }
 
 export function timeKey(value: string, settings: Pick<Settings, "timezone">): string {

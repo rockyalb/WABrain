@@ -1,5 +1,5 @@
 import type { Api } from "../api";
-import type { Chat, Context, MessageView, Person, ReviewItem, Settings, Snapshot, Task, TaskDetail, AskResponse } from "./model";
+import type { AskResponse, Chat, Context, MessageView, Person, ReviewItem, Settings, SyncResponse, Task, TaskDetail } from "./model";
 
 export type TaskPatch = Partial<Pick<Task, "title" | "description" | "kind" | "contextId" | "dueAt" | "dueHasTime">>;
 export type NewTask = TaskPatch & { title: string; kind: Task["kind"]; chatId?: string | null; personId?: string | null };
@@ -9,12 +9,15 @@ const id = encodeURIComponent;
 export function workspaceApi(api: Api) {
   const call = api.request;
   return {
-    snapshot: () => call<Snapshot>("GET", "/web/sync"),
+    sync: (cursor?: string | null) => call<SyncResponse>("GET", `/web/sync${cursor ? `?since=${id(cursor)}` : ""}`),
+    snapshot: () => call<SyncResponse>("GET", "/web/sync"),
     task: (taskId: string) => call<TaskDetail>("GET", `/web/tasks/${id(taskId)}`),
+    closedTasks: (personId: string, cursor?: string | null) => call<{ items: Task[]; nextCursor: string | null }>("GET", `/web/tasks?status=closed&limit=50&personId=${id(personId)}${cursor ? `&cursor=${id(cursor)}` : ""}`),
     createTask: (draft: NewTask) => call<Task>("POST", "/web/tasks", draft),
     updateTask: (taskId: string, patch: TaskPatch) => call<Task>("PATCH", `/web/tasks/${id(taskId)}`, patch),
     taskStatus: (taskId: string, action: "complete" | "reopen" | "cancel") => call<Task>("POST", `/web/tasks/${id(taskId)}/${action}`, {}),
     undo: (eventId: string) => call<Task>("POST", `/web/task-events/${id(eventId)}/undo`, {}),
+    review: (reviewId: string) => call<{ reviewItem: ReviewItem | null; task: Task | null }>("GET", `/web/review/${id(reviewId)}`),
     decide: (reviewId: string, accept: boolean, edits?: TaskPatch, closeAs?: "done" | "cancelled") => call<{ reviewItem: ReviewItem; task?: Task | null }>("POST", `/web/review/${id(reviewId)}/${accept ? "accept" : "reject"}`, accept ? { edits, closeAs } : {}),
     person: (personId: string) => call<Person>("GET", `/web/people/${id(personId)}`),
     updatePerson: (personId: string, patch: Partial<Pick<Person, "displayName" | "defaultContextId">>) => call<Person>("PATCH", `/web/people/${id(personId)}`, patch),

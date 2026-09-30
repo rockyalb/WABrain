@@ -51,9 +51,44 @@ class MainActivity : ComponentActivity() {
             .setData(("wabrain-internal://task/" + Uri.encode(taskId)).toUri())
             .putExtra(EXTRA_TASK_ID, taskId)
 
-        fun reviewTabIntent(context: Context): Intent = openIntent(context)
+        fun reviewIntent(context: Context, reviewItemId: String? = null): Intent = openIntent(context)
             .setAction(Intent.ACTION_VIEW)
-            .setData("wabrain-internal://review".toUri())
+            .setData(
+                if (reviewItemId == null) {
+                    "wabrain-internal://review".toUri()
+                } else {
+                    ("wabrain-internal://review/" + Uri.encode(reviewItemId)).toUri()
+                },
+            )
             .putExtra(EXTRA_OPEN_REVIEW, true)
+            .apply { if (reviewItemId != null) putExtra(EXTRA_REVIEW_ID, reviewItemId) }
+
+        fun reviewTabIntent(context: Context): Intent = reviewIntent(context)
     }
+}
+
+/** The one navigation decision made from launcher, widget and notification intents. */
+internal sealed interface AppDestination {
+    data class Task(val id: String) : AppDestination
+    data class Review(val itemId: String?) : AppDestination
+}
+
+/**
+ * Extras keep old notification PendingIntents working. The data URI makes new
+ * PendingIntents distinct and preserves their destination if Android rebuilds
+ * an intent without its extras.
+ */
+internal fun Intent.navigationTarget(): AppDestination? {
+    getStringExtra(MainActivity.EXTRA_TASK_ID)?.takeIf { it.isNotBlank() }?.let { return AppDestination.Task(it) }
+    val internal = data?.takeIf { it.scheme == "wabrain-internal" }
+    if (internal?.host == "task") {
+        internal.pathSegments.firstOrNull()?.takeIf { it.isNotBlank() }?.let { return AppDestination.Task(it) }
+    }
+
+    getStringExtra(MainActivity.EXTRA_REVIEW_ID)?.takeIf { it.isNotBlank() }?.let { return AppDestination.Review(it) }
+    if (internal?.host == "review") {
+        return AppDestination.Review(internal.pathSegments.firstOrNull()?.takeIf { it.isNotBlank() })
+    }
+    if (getBooleanExtra(MainActivity.EXTRA_OPEN_REVIEW, false)) return AppDestination.Review(null)
+    return null
 }

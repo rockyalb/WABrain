@@ -724,11 +724,19 @@
             "in": "query",
             "name": "status",
             "schema": {
-              "type": "string",
-              "enum": [
-                "open",
-                "done",
-                "cancelled"
+              "anyOf": [
+                {
+                  "type": "string",
+                  "enum": [
+                    "open",
+                    "done",
+                    "cancelled"
+                  ]
+                },
+                {
+                  "type": "string",
+                  "const": "closed"
+                }
               ]
             }
           },
@@ -1684,6 +1692,108 @@
                   "required": [
                     "items",
                     "nextCursor"
+                  ],
+                  "additionalProperties": false
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Validation failed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "description": "Unauthorized",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Rate limited",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/review/{id}": {
+      "get": {
+        "summary": "Review item and related or resulting task, including decided items",
+        "security": [
+          {
+            "deviceToken": []
+          }
+        ],
+        "parameters": [
+          {
+            "in": "path",
+            "name": "id",
+            "schema": {
+              "type": "string"
+            },
+            "required": true
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Success",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "reviewItem": {
+                      "$ref": "#/components/schemas/ReviewItem"
+                    },
+                    "task": {
+                      "anyOf": [
+                        {
+                          "$ref": "#/components/schemas/Task"
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    }
+                  },
+                  "required": [
+                    "reviewItem",
+                    "task"
                   ],
                   "additionalProperties": false
                 }
@@ -6674,6 +6784,7 @@
                 "analyze-chat",
                 "process-media",
                 "profile-chat",
+                "profile-media",
                 "profile-sweep",
                 "import-history",
                 "embed-chat",
@@ -6728,6 +6839,7 @@
                               "analyze-chat",
                               "process-media",
                               "profile-chat",
+                              "profile-media",
                               "profile-sweep",
                               "import-history",
                               "embed-chat",

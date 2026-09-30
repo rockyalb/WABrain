@@ -1,5 +1,6 @@
 import type { MessageView, Task, TaskAction } from "@wabrain/contracts";
 import { newId, schema } from "@wabrain/db";
+import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createHarness, ownerAndDevice, type Harness } from "./test/harness.js";
 
@@ -97,6 +98,22 @@ describe("tasks", () => {
     expect((await send("GET", "/v1/tasks?cursor=broken")).status).toBe(400);
     expect((await send("GET", "/v1/tasks/does-not-exist")).status).toBe(404);
   });
+
+  it("lists done and cancelled tasks together, newest closed first", async () => {
+    const make = async (title: string) => (await (await send("POST", "/v1/tasks", { kind: "todo", title })).json()) as Task;
+    const first = await make("Closed first");
+    const second = await make("Closed second");
+    const stillOpen = await make("Closed filter stays open");
+    await send("POST", `/v1/tasks/${first.id}/complete`);
+    await send("POST", `/v1/tasks/${second.id}/cancel`);
+    const page = await get<{ items: Task[]; nextCursor: string | null }>("/v1/tasks?status=closed&limit=1");
+    expect(page.items.map((task) => task.id)).toEqual([second.id]);
+    const next = await get<{ items: Task[] }>(`/v1/tasks?status=closed&limit=1&cursor=${page.nextCursor}`);
+    expect(next.items.map((task) => task.id)).toEqual([first.id]);
+    const all = await get<{ items: Task[] }>("/v1/tasks?status=closed&limit=200");
+    expect(all.items.map((task) => task.id)).not.toContain(stillOpen.id);
+    expect(all.items.every((task) => task.status === "done" || task.status === "cancelled")).toBe(true);
+  });
 });
 
 describe("idempotency", () => {
@@ -144,6 +161,33 @@ describe("review", () => {
     expect(delta2.reviewItems).toEqual([]);
     expect(delta2.deleted.reviewItems.sort()).toEqual([proposed.reviewItem.id, rejected.reviewItem.id].sort());
     expect(delta2.tasks.map((task) => task.title)).toContain("Book the van for Monday");
+  });
+
+  it("resolves exact notification targets before and after decisions for both clients", async () => {
+    const proposal = await h.deps.tasks.applyAction(createAction("Notification target"), { outcome: "review", reason: "trial_period" });
+    if (proposal.outcome !== "review") throw new Error("expected review");
+    const path = `/v1/review/${proposal.reviewItem.id}`;
+    const webPath = `/web/review/${proposal.reviewItem.id}`;
+    expect((await h.request(path)).status).toBe(401);
+    expect((await h.request(webPath)).status).toBe(401);
+    expect(await get(path)).toMatchObject({ reviewItem: { id: proposal.reviewItem.id, state: "pending" }, task: null });
+    const accepted = await h.deps.tasks.acceptReview(proposal.reviewItem.id);
+    expect(accepted.task).not.toBeNull();
+    expect(await get(path)).toMatchObject({ reviewItem: { state: "accepted" }, task: { id: accepted.task!.id } });
+    const web = await h.request(webPath, { headers: { cookie } });
+    expect(web.status).toBe(200);
+    expect(await web.json()).toMatchObject({ reviewItem: { state: "accepted" }, task: { id: accepted.task!.id } });
+    // Old notification links remain informative after the resulting task is deleted.
+    await h.testDb.database.db.delete(schema.tasks).where(eq(schema.tasks.id, accepted.task!.id));
+    expect(await get(path)).toMatchObject({ reviewItem: { state: "accepted" }, task: null });
+    expect((await send("GET", "/v1/review/missing")).status).toBe(404);
+  });
+
+  it("resolves rejected proposals without suggesting that a task was created", async () => {
+    const proposal = await h.deps.tasks.applyAction(createAction("Rejected notification target"), { outcome: "review", reason: "trial_period" });
+    if (proposal.outcome !== "review") throw new Error("expected review");
+    await h.deps.tasks.rejectReview(proposal.reviewItem.id);
+    expect(await get(`/v1/review/${proposal.reviewItem.id}`)).toMatchObject({ reviewItem: { state: "rejected" }, task: null });
   });
 });
 

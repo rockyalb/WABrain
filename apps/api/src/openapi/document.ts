@@ -126,6 +126,9 @@ const routes: Record<string, Partial<Record<"get" | "post" | "patch" | "put" | "
   "/v1/tasks/{id}/cancel": { post: { summary: "Cancel (owner)", security: "device", params: idParam(), responses: { 200: TaskSchema }, mutating: true } },
   "/v1/task-events/{id}/undo": { post: { summary: "Undo a task event", security: "device", params: idParam(), responses: { 200: TaskSchema }, mutating: true } },
   "/v1/review": { get: { summary: "Pending review items", security: "device", query: S.PageQuerySchema, responses: { 200: ReviewList } } },
+  "/v1/review/{id}": {
+    get: { summary: "Review item and related or resulting task, including decided items", security: "device", params: idParam(), responses: { 200: S.AcceptReviewResponseSchema } },
+  },
   "/v1/review/{id}/accept": {
     post: { summary: "Accept a review item", security: "device", params: idParam(), body: S.AcceptReviewRequestSchema, responses: { 200: S.AcceptReviewResponseSchema }, mutating: true },
   },

@@ -1,24 +1,29 @@
 import { createContext } from "preact";
 import type { ComponentChildren } from "preact";
-import { useCallback, useContext, useEffect, useMemo, useState } from "preact/hooks";
+import { useCallback, useContext, useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { describeError } from "../api";
 import { MenuButton } from "../components/mobile";
 import { useApi } from "../components/ui";
 import type { Section } from "../sections";
 import { workspaceApi } from "./api";
-import type { Snapshot } from "./model";
+import type { ReviewItem, Snapshot, Task } from "./model";
 import { TasksView } from "./Tasks";
 import { PeopleView } from "./People";
 import { ChatsView } from "./Chats";
 import { AskView } from "./Ask";
 import { SettingsView } from "./Settings";
+import { applyReviewDecision, createKeyedOperationRunner, createRefreshCoordinator, mergeSyncResponse, upsertSnapshotTask } from "./sync";
 
 export interface WorkspaceState {
   data: Snapshot;
   api: ReturnType<typeof workspaceApi>;
   busy: boolean;
+  pending: (key: string) => boolean;
   refresh: () => Promise<void>;
   run: (operation: () => Promise<unknown>) => Promise<boolean>;
+  runKeyed: (key: string, operation: () => Promise<unknown>) => Promise<boolean>;
+  runTask: (taskId: string, operation: () => Promise<Task>) => Promise<boolean>;
+  runReview: (reviewId: string, operation: () => Promise<{ reviewItem: ReviewItem; task?: Task | null }>) => Promise<boolean>;
 }
 
 const WorkspaceContext = createContext<WorkspaceState | null>(null);
@@ -34,15 +39,82 @@ export function Workspace(props: { section: Section; hash: string }) {
   const api = useMemo(() => workspaceApi(ownerApi), [ownerApi]);
   const [data, setData] = useState<Snapshot | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(false);
-  const refresh = useCallback(async () => {
+  const [pendingKeys, setPendingKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const [syncing, setSyncing] = useState(false);
+  const [syncFailed, setSyncFailed] = useState(false);
+  const [lastSyncedAt, setLastSyncedAt] = useState<number | null>(null);
+  const [online, setOnline] = useState(() => navigator.onLine !== false);
+  const cursor = useRef<string | null>(null);
+  const taskOverlays = useRef(new Map<string, Task>());
+  const decidedReviews = useRef(new Set<string>());
+  const coordinator = useMemo(() => createRefreshCoordinator(async () => {
+    setSyncing(true);
     try {
-      setData(await api.snapshot());
+      const response = await api.sync(cursor.current);
+      setData((current) => {
+        let next = mergeSyncResponse(current, response);
+        for (const reviewId of decidedReviews.current) next = applyReviewDecision(next, reviewId);
+        for (const task of taskOverlays.current.values()) next = upsertSnapshotTask(next, task);
+        return next;
+      });
+      cursor.current = response.cursor;
+      setLastSyncedAt(Date.now());
+      setOnline(navigator.onLine !== false);
+      setSyncFailed(false);
       setError(null);
     } catch (caught) {
+      setSyncFailed(true);
       setError(describeError(caught));
+      throw caught;
+    } finally {
+      setSyncing(false);
     }
-  }, [api]);
+  }), [api]);
+  const refresh = useCallback(async () => {
+    try { await coordinator.request(); } catch { /* The banner and freshness status carry the failure. */ }
+  }, [coordinator]);
+
+  const operations = useMemo(() => createKeyedOperationRunner({
+    afterSuccess: refresh,
+    onChange: setPendingKeys,
+    onError: (caught) => setError(describeError(caught)),
+  }), [refresh]);
+  const runKeyed = useCallback((key: string, operation: () => Promise<unknown>) => {
+    setError(null);
+    return operations.run(key, operation);
+  }, [operations]);
+  const run = useCallback((operation: () => Promise<unknown>) => runKeyed("workspace", operation), [runKeyed]);
+  const runTask = useCallback(async (taskId: string, operation: () => Promise<Task>) => {
+    const adopted: { task: Task | null } = { task: null };
+    const ok = await runKeyed(`task:${taskId}`, async () => {
+      const task = await operation();
+      taskOverlays.current.set(taskId, task);
+      setData((current) => current ? upsertSnapshotTask(current, task) : current);
+      adopted.task = task;
+    });
+    if (adopted.task && taskOverlays.current.get(taskId) === adopted.task) taskOverlays.current.delete(taskId);
+    return ok;
+  }, [runKeyed]);
+  const runReview = useCallback(async (reviewId: string, operation: () => Promise<{ reviewItem: ReviewItem; task?: Task | null }>) => {
+    let adopted = false;
+    const adoptedResult: { task: Task | null } = { task: null };
+    const ok = await runKeyed(`review:${reviewId}`, async () => {
+      const result = await operation();
+      decidedReviews.current.add(reviewId);
+      if (result.task) {
+        adoptedResult.task = result.task;
+        taskOverlays.current.set(result.task.id, result.task);
+      }
+      setData((current) => current ? applyReviewDecision(current, reviewId, result.task) : current);
+      adopted = true;
+    });
+    if (adopted) {
+      decidedReviews.current.delete(reviewId);
+      const task = adoptedResult.task;
+      if (task && taskOverlays.current.get(task.id) === task) taskOverlays.current.delete(task.id);
+    }
+    return ok;
+  }, [runKeyed]);
 
   useEffect(() => {
     void refresh();
@@ -58,31 +130,29 @@ export function Workspace(props: { section: Section; hash: string }) {
     void checkNotifications();
     const notificationTimer = window.setInterval(() => { if (!document.hidden) void checkNotifications(); }, 60_000);
     const onMessage = (event: MessageEvent) => { if (event.data?.type === "workspace:refresh") void refresh(); };
+    const onVisible = () => { if (!document.hidden) void refresh(); };
+    const onFocus = () => { if (!document.hidden) void refresh(); };
+    const onOnline = () => { setOnline(true); void refresh(); };
+    const onOffline = () => setOnline(false);
     navigator.serviceWorker?.addEventListener("message", onMessage);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onFocus);
+    window.addEventListener("online", onOnline);
+    window.addEventListener("offline", onOffline);
     return () => {
       window.clearInterval(timer);
       window.clearInterval(notificationTimer);
       navigator.serviceWorker?.removeEventListener("message", onMessage);
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onFocus);
+      window.removeEventListener("online", onOnline);
+      window.removeEventListener("offline", onOffline);
     };
   }, [refresh, api]);
 
-  const run = useCallback(async (operation: () => Promise<unknown>) => {
-    setBusy(true);
-    setError(null);
-    try {
-      await operation();
-      await refresh();
-      return true;
-    } catch (caught) {
-      setError(describeError(caught));
-      return false;
-    } finally {
-      setBusy(false);
-    }
-  }, [refresh]);
-
   if (!data) return <div class="ws-loading">{error ? <ErrorPanel message={error} onRetry={refresh} /> : <p>Loading your workspace…</p>}</div>;
-  const state: WorkspaceState = { data, api, busy, refresh, run };
+  const busy = pendingKeys.has("workspace");
+  const state: WorkspaceState = { data, api, busy, pending: (key) => pendingKeys.has(key), refresh, run, runKeyed, runTask, runReview };
   const View = props.section === "people" ? PeopleView
     : props.section === "chats" ? ChatsView
     : props.section === "ask" ? AskView
@@ -90,10 +160,28 @@ export function Workspace(props: { section: Section; hash: string }) {
     : TasksView;
   return (
     <WorkspaceContext.Provider value={state}>
+      <SyncStatus online={online} syncing={syncing} failed={syncFailed} lastSyncedAt={lastSyncedAt} onRetry={refresh} />
       {error ? <div class="ws-error" role="alert"><span>{error}</span><button type="button" onClick={() => setError(null)}>Dismiss</button></div> : null}
       <View hash={props.hash} />
     </WorkspaceContext.Provider>
   );
+}
+
+function SyncStatus(props: { online: boolean; syncing: boolean; failed: boolean; lastSyncedAt: number | null; onRetry: () => Promise<void> }) {
+  const time = props.lastSyncedAt === null ? null : new Intl.DateTimeFormat(undefined, { hour: "numeric", minute: "2-digit" }).format(props.lastSyncedAt);
+  const label = !props.online
+    ? `Offline${time ? ` · Last synced ${time}` : ""}`
+    : props.syncing
+      ? "Updating…"
+      : props.failed
+        ? `Update failed${time ? ` · Last synced ${time}` : ""}`
+      : time
+        ? `Synced ${time}`
+        : "Connecting…";
+  const unhealthy = !props.online || props.failed;
+  return <div class={`ws-sync-status ${unhealthy ? "offline" : ""}`} role="status" aria-live="polite">
+    <i aria-hidden="true" /><span>{label}</span>{props.online && props.failed && !props.syncing ? <button type="button" onClick={() => void props.onRetry()}>Retry</button> : null}
+  </div>;
 }
 
 function ErrorPanel(props: { message: string; onRetry: () => Promise<void> }) {

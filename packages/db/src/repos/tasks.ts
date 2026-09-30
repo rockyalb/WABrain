@@ -1,5 +1,5 @@
 import type { MessageView, ReviewItem, Task, TaskEvent, TaskKind, TaskStatus } from "@wabrain/contracts";
-import { and, asc, desc, eq, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, ne, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../client.js";
 import { notFound } from "../errors.js";
 import { toReviewItem, toTask, toTaskEvent, type ReviewItemRow, type TaskRow } from "../mappers.js";
@@ -8,7 +8,8 @@ import { reviewItems, taskEvents, tasks } from "../schema.js";
 import { getMessageViews } from "./messages.js";
 
 export interface TaskFilter extends PageRequest {
-  status?: TaskStatus | null;
+  /** "closed" is done or cancelled, newest closed first. */
+  status?: TaskStatus | "closed" | null;
   kind?: TaskKind | null;
   contextId?: string | null;
   chatId?: string | null;
@@ -17,23 +18,27 @@ export interface TaskFilter extends PageRequest {
 
 export async function listTasks(db: Db, filter: TaskFilter = {}): Promise<Page<Task>> {
   const limit = clampLimit(filter.limit);
+  const closed = filter.status === "closed";
+  // Closed tasks page by when they closed; a task closed without a time falls back to its last update.
+  const closedAt = sql`coalesce(${tasks.closedAt}, ${tasks.updatedAt})`;
   const where: SQL[] = [];
-  if (filter.status) where.push(eq(tasks.status, filter.status));
+  if (filter.status === "closed") where.push(ne(tasks.status, "open"));
+  else if (filter.status) where.push(eq(tasks.status, filter.status));
   if (filter.kind) where.push(eq(tasks.kind, filter.kind));
   if (filter.contextId) where.push(eq(tasks.contextId, filter.contextId));
   if (filter.chatId) where.push(eq(tasks.chatId, filter.chatId));
   if (filter.personId) where.push(eq(tasks.personId, filter.personId));
   if (filter.cursor) {
     const [at, id] = decodeCursor(filter.cursor, 2);
-    where.push(sql`(${tasks.createdAt}, ${tasks.id}) < (${String(at)}::timestamptz, ${String(id)})`);
+    where.push(sql`(${closed ? closedAt : tasks.createdAt}, ${tasks.id}) < (${String(at)}::timestamptz, ${String(id)})`);
   }
   const rows = await db
     .select()
     .from(tasks)
     .where(and(...where))
-    .orderBy(desc(tasks.createdAt), desc(tasks.id))
+    .orderBy(...(closed ? [desc(closedAt), desc(tasks.id)] : [desc(tasks.createdAt), desc(tasks.id)]))
     .limit(limit + 1);
-  return toPage(rows, limit, toTask, (row) => [row.createdAt.toISOString(), row.id]);
+  return toPage(rows, limit, toTask, (row) => [(closed ? row.closedAt ?? row.updatedAt : row.createdAt).toISOString(), row.id]);
 }
 
 export async function findTaskRow(db: Db, id: string, lock = false): Promise<TaskRow | null> {
@@ -107,4 +112,12 @@ export async function getReviewRow(db: Db, id: string, lock = false): Promise<Re
   const [row] = lock ? await query.for("update") : await query;
   if (!row) throw notFound("Review item");
   return row;
+}
+
+/** Resolve notification links after a decision, including tasks created by an accepted proposal. */
+export async function getReviewDetail(db: Db, id: string): Promise<{ reviewItem: ReviewItem; task: Task | null }> {
+  const row = await getReviewRow(db, id);
+  const taskId = row.resultTaskId ?? row.taskId;
+  const task = taskId ? await findTaskRow(db, taskId) : null;
+  return { reviewItem: toReviewItem(row), task: task ? toTask(task) : null };
 }

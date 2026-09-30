@@ -78,8 +78,9 @@ changed after the cursor.
 
 ## Tasks
 
-- `GET /v1/tasks?status=open|done|cancelled&kind=&contextId=&chatId=&personId=`
-  returns a list.
+- `GET /v1/tasks?status=open|done|cancelled|closed&kind=&contextId=&chatId=&personId=`
+  returns a list. `closed` means done or cancelled together, newest closed
+  first; the cursor then pages by close time.
 - `GET /v1/tasks/:id` returns
   `{ task: Task, events: [TaskEvent], evidence: [MessageView] }`.
 - `POST /v1/tasks` creates a manual task from
@@ -100,6 +101,10 @@ changed after the cursor.
 ## Review
 
 - `GET /v1/review` returns a list of pending ReviewItems.
+- `GET /v1/review/:id` returns `{ reviewItem, task }` for a pending or decided
+  item, so a notification can open the exact proposal or its resulting task.
+  `task` is nullable (for example a rejected create, or a deleted result task);
+  a missing item returns `404`. The browser uses the same route at `/web/review/:id`.
 - `POST /v1/review/:id/accept` `{ edits?, closeAs? }` applies the item's action. For a
   `create`, `edits` may override the title, description, dueAt, contextId, or
   kind, and `closeAs` (`done` or `cancelled`) closes the new task at once, for a

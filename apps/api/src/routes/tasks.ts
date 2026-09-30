@@ -1,4 +1,4 @@
-import { getTaskDetail, listPendingReview, listTasks } from "@wabrain/db";
+import { getReviewDetail, getTaskDetail, listPendingReview, listTasks } from "@wabrain/db";
 import { Hono } from "hono";
 import type { AppDeps, AppEnv } from "../deps.js";
 import {
@@ -36,6 +36,8 @@ export function taskRoutes(deps: AppDeps) {
   app.post("/task-events/:id/undo", async (c) => c.json(await tasks.undoEvent(c.req.param("id"))));
 
   app.get("/review", async (c) => c.json(await listPendingReview(database.db, queryParams(c, PageQuerySchema))));
+
+  app.get("/review/:id", async (c) => c.json(await getReviewDetail(database.db, c.req.param("id"))));
 
   app.post("/review/:id/accept", async (c) => {
     const body = await jsonBody(c, AcceptReviewRequestSchema);

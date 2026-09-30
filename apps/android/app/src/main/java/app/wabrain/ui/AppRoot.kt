@@ -41,8 +41,10 @@ import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import androidx.navigation.toRoute
 import app.wabrain.AppContainer
+import app.wabrain.AppDestination
 import app.wabrain.MainActivity
 import app.wabrain.R
+import app.wabrain.navigationTarget
 import app.wabrain.data.session.Session
 import app.wabrain.push.PushController
 import app.wabrain.ui.ask.AskScreen
@@ -134,16 +136,14 @@ private fun MainScaffold(container: AppContainer, intent: Intent?, onIntentConsu
     // Notification / widget taps.
     LaunchedEffect(intent) {
         val i = intent ?: return@LaunchedEffect
-        val taskId = i.getStringExtra(MainActivity.EXTRA_TASK_ID)
-        val reviewId = i.getStringExtra(MainActivity.EXTRA_REVIEW_ID)
-        when {
-            taskId != null -> nav.navigate(TaskDetailRoute(taskId))
-            reviewId != null || i.getBooleanExtra(MainActivity.EXTRA_OPEN_REVIEW, false) ->
-                nav.navigate(TasksRoute(TaskTabs.REVIEW)) {
+        when (val target = i.navigationTarget()) {
+            is AppDestination.Task -> nav.navigate(TaskDetailRoute(target.id))
+            is AppDestination.Review ->
+                nav.navigate(TasksRoute(TaskTabs.REVIEW, target.itemId)) {
                     popUpTo(nav.graph.findStartDestination().id)
                     launchSingleTop = true
                 }
-            else -> Unit
+            null -> Unit
         }
         if (i.data?.scheme != "wabrain") onIntentConsumed()
     }
@@ -193,9 +193,11 @@ private fun MainScaffold(container: AppContainer, intent: Intent?, onIntentConsu
             val bottom = PaddingValues(bottom = padding.calculateBottomPadding())
             NavHost(nav, startDestination = TasksRoute(), modifier = Modifier.padding(bottom).consumeWindowInsets(bottom)) {
                 composable<TasksRoute> { entry ->
+                    val route = entry.toRoute<TasksRoute>()
                     TasksScreen(
                         container = container,
-                        initialTab = entry.toRoute<TasksRoute>().tab,
+                        initialTab = route.tab,
+                        initialReviewItemId = route.reviewItemId,
                         onOpenTask = { nav.navigate(TaskDetailRoute(it)) },
                         onOpenConversation = { chatId, messageId -> nav.navigate(ConversationRoute(chatId, messageId)) },
                         onOpenAsk = { openTopLevel(AskRoute) },

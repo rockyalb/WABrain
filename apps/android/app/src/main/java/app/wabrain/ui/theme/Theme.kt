@@ -2,6 +2,7 @@ package app.wabrain.ui.theme
 
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
@@ -186,7 +187,14 @@ private val WabTypography = Typography(
 /** Mint Glass theme with light and dark variants. */
 @Composable
 fun WabTheme(darkTheme: Boolean = isSystemInDarkTheme(), content: @Composable () -> Unit) {
-    CompositionLocalProvider(LocalGlass provides if (darkTheme) DarkGlass else LightGlass) {
-        MaterialTheme(colorScheme = if (darkTheme) DarkColors else LightColors, typography = WabTypography, content = content)
+    val colors = if (darkTheme) DarkColors else LightColors
+    MaterialTheme(colorScheme = colors, typography = WabTypography) {
+        // Transparent scaffolds and glass boxes have no Surface to choose an ink color.
+        // Supply the themed default so uncolored Text/Icon never inherit Compose's black default.
+        CompositionLocalProvider(
+            LocalGlass provides if (darkTheme) DarkGlass else LightGlass,
+            LocalContentColor provides colors.onBackground,
+            content = content,
+        )
     }
 }
