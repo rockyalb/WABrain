@@ -38,6 +38,7 @@ const action = (overrides: Partial<ModelTaskAction>): ModelTaskAction => ({
   taskIds: null,
   contextId: null,
   contextReason: null,
+  handled: null,
   confidence: 0.9,
   ambiguityReasons: [],
   evidenceMessageIds: ["m1"],
@@ -156,6 +157,18 @@ describe("validateModelActions", () => {
     const { actions } = validate(action({ title: "Send the contract tomorrow", language: "English please" }));
     expect(actions[0]).toMatchObject({ language: "en" });
   });
+
+  it("keeps a create's same-burst handled hint, citing only new messages", () => {
+    const { actions } = validate(action({ handled: { status: "done", evidenceMessageIds: ["m2", "old", "nope", "m2"] } }));
+    expect(actions[0]).toMatchObject({ type: "create", alreadyHandled: { status: "done", evidenceMessageIds: ["m2"] } });
+  });
+
+  it("drops a handled hint that cites no new message, keeping the create", () => {
+    const { actions, dropped } = validate(action({ handled: { status: "cancelled", evidenceMessageIds: ["old"] } }));
+    expect(dropped).toEqual([]);
+    expect(actions[0]).toMatchObject({ type: "create" });
+    expect(actions[0]).not.toHaveProperty("alreadyHandled");
+  });
 });
 
 describe("validateModelActions with pending creates", () => {
@@ -267,6 +280,7 @@ function toModelAction(expected: ExpectedAction, evidenceId: string): ModelTaskA
         due: expected.dueDate ? { date: expected.dueDate, time: expected.dueTime ?? null } : null,
         contextId: expected.contextId ?? null,
         contextReason: expected.contextId ? "fixture override" : null,
+        handled: expected.handled ? { status: expected.handled, evidenceMessageIds: [evidenceId] } : null,
         evidenceMessageIds: [evidenceId],
       });
     case "reschedule":

@@ -131,7 +131,7 @@ with a pending create's exact title is also dropped in validation), and a later
 The agent returns zero or more actions:
 
 ```text
-create      { kind: todo | waiting_on, title, description, dueAt?, context?, evidence }
+create      { kind: todo | waiting_on, title, description, dueAt?, context?, alreadyHandled?, evidence }
 complete    { taskId, evidence }
 cancel      { taskId, evidence }
 reschedule  { taskId, dueAt, evidence }
@@ -160,6 +160,11 @@ evidence (the owner's messages or someone else's).
   the create counts as accepted for calibration), keep as open task, or reject.
   If the owner accepted the create in the meantime, the change becomes an
   ordinary Review prompt on the new task; if they rejected it, it is dropped.
+- A `create` whose own burst already shows it handled (a request and, a few
+  messages later, "here you go" or the delivery itself; or "never mind") carries
+  `alreadyHandled` and always goes to Review (`already_handled`), stamped with
+  the same hint and the same choices. Whether the "done" lands in the same
+  burst or a later one, the owner sees the same card.
 - `merge`: always Review.
 - Every applied action can be undone and is written to `task_events`.
 - Every Review item triggers a notification.

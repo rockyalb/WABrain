@@ -359,6 +359,23 @@ describe("TaskService", () => {
       expect(await listPendingCreatesForChat(testDb.database.db, chatId)).toEqual([]);
     });
 
+    it("stamps a create handled in its own burst with the hint from the start", async () => {
+      const request = await message("can you check the order document?");
+      const reply = await message("here you go, all ready", true);
+      events = [];
+      const result = await service.applyAction(
+        { ...(createAction("Check the order document") as Extract<TaskAction, { type: "create" }>), evidenceMessageIds: [request], alreadyHandled: { status: "done", evidenceMessageIds: [reply] } },
+        { outcome: "review", reason: "already_handled" },
+        { chatId },
+      );
+      if (result.outcome !== "review") throw new Error("expected review");
+      expect(result).toMatchObject({ created: true, reviewItem: { type: "create", reason: "already_handled" } });
+      expect(result.reviewItem.handled).toMatchObject({ status: "done", evidenceMessageIds: [reply], excerpt: "here you go, all ready", fromOwner: true });
+      expect(events.map((event) => event.type)).toEqual(["review"]);
+      const { task } = await service.acceptReview(result.reviewItem.id, {}, "done");
+      expect(task).toMatchObject({ status: "done", title: "Check the order document" });
+    });
+
     it("refuses closeAs on anything but a create", async () => {
       const created = await service.applyAction(createAction("Pay rent"), apply, { chatId });
       if (created.outcome !== "applied") throw new Error("expected applied");

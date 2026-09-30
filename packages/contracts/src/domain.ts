@@ -221,6 +221,15 @@ const ActionBase = {
   evidenceMessageIds: z.array(Id).min(1),
 };
 
+/**
+ * create only: the same new messages that ask for the task already show it done or no longer needed
+ * (a request and its "here you go" in one burst). The create always goes to Review with a handled hint.
+ */
+export const CreateAlreadyHandledSchema = z.object({
+  status: z.enum(["done", "cancelled"]),
+  evidenceMessageIds: z.array(Id).min(1),
+});
+
 export const CreateTaskActionSchema = z.object({
   type: z.literal("create"),
   kind: TaskKindSchema,
@@ -232,6 +241,7 @@ export const CreateTaskActionSchema = z.object({
   /** Context override; null means inherit the chat default. */
   contextId: Id.nullable(),
   language: z.string().nullable(),
+  alreadyHandled: CreateAlreadyHandledSchema.optional(),
   ...ActionBase,
 });
 
@@ -293,6 +303,7 @@ export const PolicyDecisionSchema = z.object({
     "history_import",
     "conflicting_actions",
     "pending_create",
+    "already_handled",
   ]),
 });
 
@@ -309,8 +320,9 @@ export const ReviewItemTypeSchema = z.enum([
 ]);
 
 /**
- * A later message suggests a pending create was already dealt with (done or no longer needed) before the
- * owner reviewed it. Set by analysis; the owner decides (accept as open, accept as done/cancelled, reject).
+ * A message after the request suggests a pending create was already dealt with (done or no longer needed)
+ * before the owner reviewed it: a later burst, or the same burst as the request (CreateAlreadyHandled).
+ * Set by analysis; the owner decides (accept as open, accept as done/cancelled, reject).
  */
 export const ReviewHandledHintSchema = z.object({
   status: z.enum(["done", "cancelled"]),

@@ -106,8 +106,10 @@ changed after the cursor.
   create whose `handled` hint says a later message already dealt with it. It
   returns `{ reviewItem, task }`.
 - A pending `create` carries `handled`: null, or `{ status: done | cancelled,
-  evidenceMessageIds, confidence, excerpt, fromOwner, at }` when a later message
-  suggests it was already handled before it was reviewed.
+  evidenceMessageIds, confidence, excerpt, fromOwner, at }` when a message after
+  the request (in a later burst, or the same one: the create's
+  `alreadyHandled`, reason `already_handled`) suggests it was already handled
+  before it was reviewed.
 - `POST /v1/review/:id/reject` returns `{ reviewItem }`.
 - Every decision is stored as a labelled evaluation example.
 

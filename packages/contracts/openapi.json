@@ -4515,6 +4515,31 @@
                                 "null"
                               ]
                             },
+                            "alreadyHandled": {
+                              "type": "object",
+                              "properties": {
+                                "status": {
+                                  "type": "string",
+                                  "enum": [
+                                    "done",
+                                    "cancelled"
+                                  ]
+                                },
+                                "evidenceMessageIds": {
+                                  "minItems": 1,
+                                  "type": "array",
+                                  "items": {
+                                    "type": "string",
+                                    "minLength": 1
+                                  }
+                                }
+                              },
+                              "required": [
+                                "status",
+                                "evidenceMessageIds"
+                              ],
+                              "additionalProperties": false
+                            },
                             "confidence": {
                               "type": "number",
                               "minimum": 0,
@@ -7951,7 +7976,8 @@
               "chat_not_analyzed",
               "history_import",
               "conflicting_actions",
-              "pending_create"
+              "pending_create",
+              "already_handled"
             ]
           },
           "chatId": {
@@ -8122,6 +8148,31 @@
                   "string",
                   "null"
                 ]
+              },
+              "alreadyHandled": {
+                "type": "object",
+                "properties": {
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "done",
+                      "cancelled"
+                    ]
+                  },
+                  "evidenceMessageIds": {
+                    "minItems": 1,
+                    "type": "array",
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                },
+                "required": [
+                  "status",
+                  "evidenceMessageIds"
+                ],
+                "additionalProperties": false
               },
               "confidence": {
                 "type": "number",

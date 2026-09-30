@@ -23,7 +23,15 @@ export interface EvalOpenTask {
 }
 
 export type ExpectedAction =
-  | { type: "create"; kind: TaskKind; dueDate?: string | null; dueTime?: string | null; contextId?: string | null }
+  | {
+      type: "create";
+      kind: TaskKind;
+      dueDate?: string | null;
+      dueTime?: string | null;
+      contextId?: string | null;
+      /** The same burst already shows it done / no longer needed (alreadyHandled); null = must not be flagged. */
+      handled?: "done" | "cancelled" | null;
+    }
   | { type: "complete" | "cancel"; taskId: string }
   | { type: "reschedule"; taskId: string; dueDate: string; dueTime?: string | null }
   | { type: "merge"; taskIds: string[] };

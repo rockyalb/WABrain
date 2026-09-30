@@ -74,6 +74,9 @@ function convert(raw: ModelTaskAction, memory: WorkingMemory, settings: Pick<Set
           : null;
       // The same title as a create still waiting in Review is the same proposal again.
       if (memory.pendingTasks.some((task) => task.title.toLowerCase() === title.toLowerCase())) return { ok: false, reason: "duplicate" };
+      // Handled in the same burst: only new messages can show it (older ones predate the request).
+      const handledIds = [...new Set((raw.handled?.evidenceMessageIds ?? []).map((id) => id.trim()).filter((id) => ids.burst.has(id)))];
+      const alreadyHandled = raw.handled && handledIds.length > 0 ? { status: raw.handled.status, evidenceMessageIds: handledIds } : null;
       const modelLanguage = clean(raw.language).toLowerCase();
       return {
         ok: true,
@@ -87,6 +90,7 @@ function convert(raw: ModelTaskAction, memory: WorkingMemory, settings: Pick<Set
           dueHasTime: due?.dueHasTime ?? false,
           contextId,
           language: LANGUAGE_RE.test(modelLanguage) ? modelLanguage : detectLanguage(title),
+          ...(alreadyHandled ? { alreadyHandled } : {}),
           ...base,
           ambiguityReasons: ambiguityReasons.slice(0, MAX_AMBIGUITY_REASONS),
         },
@@ -129,7 +133,8 @@ function dedupeKey(action: TaskAction): string {
 /**
  * Turns raw model output into contract TaskActions. Drops actions that cite unknown messages or no new
  * message, reference tasks that are in neither the open nor the pending task list (merge: open only), repeat a
- * pending create's title, or lack required fields; resolves
+ * pending create's title, or lack required fields; keeps a create's same-burst handled hint only for new
+ * messages; resolves
  * local dues into instants; keeps only allowed context overrides; removes duplicates (highest confidence
  * wins); and finally parses each action with the contract's TaskActionSchema.
  */

@@ -86,6 +86,8 @@ const isChange = (action: TaskAction): action is ChangeAction =>
 /** What accepting an action would do, without its supporting evidence, confidence and doubts. */
 function proposalOf(action: TaskAction): Record<string, unknown> {
   const { evidenceMessageIds: _evidence, confidence: _confidence, ambiguityReasons: _ambiguity, ...proposal } = action;
+  // A same-burst handled hint is evidence about the proposal, not a different proposal.
+  if (proposal.type === "create") delete proposal.alreadyHandled;
   return proposal;
 }
 
@@ -644,23 +646,32 @@ export class TaskService {
       if (previous?.status === status && sameCanonical(previous.evidenceMessageIds, action.evidenceMessageIds)) {
         return { reviewItem: toReviewItem(item), changed: false };
       }
-      const [first] = await db
-        .select({ body: messages.body, derivedText: messages.derivedText, fromOwner: messages.fromOwner })
-        .from(messages)
-        .where(eq(messages.id, action.evidenceMessageIds[0]!));
-      const text = (first?.body.trim() || first?.derivedText?.trim() || "").replace(/\s+/g, " ");
-      const handled: ReviewHandledHint = {
-        status,
-        evidenceMessageIds: action.evidenceMessageIds,
-        confidence: action.confidence,
-        excerpt: text.length > EXCERPT_CHARS ? `${text.slice(0, EXCERPT_CHARS)}…` : text,
-        fromOwner: first?.fromOwner ?? false,
-        at: this.now().toISOString(),
-      };
-      set = { handled };
+      set = { handled: await this.handledHint(db, status, action.evidenceMessageIds, action.confidence) };
     }
     const [updated] = await db.update(reviewItems).set(set).where(eq(reviewItems.id, item.id)).returning();
     return { reviewItem: toReviewItem(updated!), changed: true };
+  }
+
+  /** The Review card's "may already be handled" hint, quoting the first message that shows it. */
+  private async handledHint(
+    db: Db,
+    status: ReviewHandledHint["status"],
+    evidenceMessageIds: string[],
+    confidence: number,
+  ): Promise<ReviewHandledHint> {
+    const [first] = await db
+      .select({ body: messages.body, derivedText: messages.derivedText, fromOwner: messages.fromOwner })
+      .from(messages)
+      .where(eq(messages.id, evidenceMessageIds[0]!));
+    const text = (first?.body.trim() || first?.derivedText?.trim() || "").replace(/\s+/g, " ");
+    return {
+      status,
+      evidenceMessageIds,
+      confidence,
+      excerpt: text.length > EXCERPT_CHARS ? `${text.slice(0, EXCERPT_CHARS)}…` : text,
+      fromOwner: first?.fromOwner ?? false,
+      at: this.now().toISOString(),
+    };
   }
 
   private async createReviewItem(
@@ -710,6 +721,11 @@ export class TaskService {
     const inherited = await this.inherit(db, ctx.chatId ?? task?.chatId ?? null, ctx.personId ?? task?.personId ?? null);
     const summary = `${prefix[type]}${title}`.slice(0, 300);
     const chatId = ctx.chatId ?? task?.chatId ?? null;
+    // Asked and already handled in the same burst: the item carries the hint from the start.
+    const handled =
+      action.type === "create" && action.alreadyHandled
+        ? await this.handledHint(db, action.alreadyHandled.status, action.alreadyHandled.evidenceMessageIds, action.confidence)
+        : undefined;
     if (existing) {
       const existingAction = existing.action as TaskAction;
       // An identical retry (same action, evidence and confidence) returns the pending item untouched.
@@ -728,6 +744,7 @@ export class TaskService {
           chatId,
           personId: inherited.personId,
           summary,
+          ...(handled ? { handled } : {}),
           analysisRunId: ctx.analysisRunId ?? null,
           createdAt,
         })
@@ -747,6 +764,7 @@ export class TaskService {
         chatId,
         personId: inherited.personId,
         summary,
+        handled: handled ?? null,
         analysisRunId: ctx.analysisRunId ?? null,
         createdAt: this.now(),
       })

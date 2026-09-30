@@ -121,7 +121,7 @@ function taskModel() {
       if (lower.includes("contract")) {
         actions.push({
           type: "create", kind: "todo", title: "Send the contract", description: "Sam asks for the contract.", language: "en",
-          due: { date: prompt.calendar.tomorrow, time: null }, taskId: null, taskIds: null, contextId: null, contextReason: null,
+          due: { date: prompt.calendar.tomorrow, time: null }, taskId: null, taskIds: null, contextId: null, contextReason: null, handled: null,
           confidence: 0.95, ambiguityReasons: [], evidenceMessageIds: [message.id],
         });
       }
@@ -129,7 +129,7 @@ function taskModel() {
       if ((lower.includes("sent") || lower.includes("done")) && target) {
         actions.push({
           type: "complete", kind: null, title: null, description: null, language: null, due: null,
-          taskId: target.id, taskIds: null, contextId: null, contextReason: null,
+          taskId: target.id, taskIds: null, contextId: null, contextReason: null, handled: null,
           confidence: 0.95, ambiguityReasons: [], evidenceMessageIds: [message.id],
         });
       }

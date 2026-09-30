@@ -113,7 +113,8 @@ const CHANGE_REVIEW_TYPE = {
  *
  * - create: Review during the trial, when auto-create is off for the chat, when the active model/prompt
  *   profile has no usable calibration yet (even after the trial), below max(automatic-change threshold,
- *   calibrated threshold), or when the model reported any ambiguity; otherwise applied.
+ *   calibrated threshold), or when the model reported any ambiguity; otherwise applied. A create whose
+ *   own burst already shows it handled (alreadyHandled) always goes to Review (already_handled).
  * - complete / cancel / reschedule: dropped when the task is unknown, belongs to another chat, or is not
  *   open. Applied only when every evidence message is the owner's, the action is unambiguous, and its
  *   confidence reaches the automatic-change threshold; anyone else's evidence becomes a Possibly done /
@@ -128,6 +129,8 @@ export function decideAction(action: TaskAction, ctx: PolicyContext): PolicyResu
 
   switch (action.type) {
     case "create": {
+      // The burst already shows it done or no longer needed: the owner decides, whatever the calibration.
+      if (action.alreadyHandled) return review("already_handled", "create");
       if (isInTrial(ctx.settings, ctx.now)) return review("trial_period", "create");
       if (!ctx.chat.autoCreate) return review("auto_create_disabled", "create");
       const calibrated = usableCalibration(ctx);

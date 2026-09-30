@@ -23,6 +23,13 @@ export const ModelTaskActionSchema = z.object({
   taskIds: z.array(z.string()).nullable().describe("merge only: open task ids, the one to keep first"),
   contextId: z.string().nullable().describe("create only: a listed context id to override the chat default, else null"),
   contextReason: z.string().nullable().describe("why the context override applies, else null"),
+  handled: z
+    .object({
+      status: z.enum(["done", "cancelled"]),
+      evidenceMessageIds: z.array(z.string()).describe("ids of the new messages showing it done or no longer needed"),
+    })
+    .nullable()
+    .describe("create only: the new messages already show this task done or no longer needed, else null"),
   confidence: z.number().describe("0 to 1"),
   ambiguityReasons: z.array(z.string()),
   evidenceMessageIds: z.array(z.string()).describe("ids of the messages that justify this action"),

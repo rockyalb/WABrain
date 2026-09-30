@@ -209,6 +209,10 @@ export function scoreCase(evalCase: EvalCase, actions: readonly TaskAction[]): C
     if (expected.type === "create" && expected.contextId !== undefined && actual!.type === "create" && actual!.contextId !== expected.contextId) {
       score.problems.push(`context: expected ${expected.contextId}, got ${actual!.contextId}`);
     }
+    if (expected.type === "create" && expected.handled !== undefined && actual!.type === "create") {
+      const handled = actual!.alreadyHandled?.status ?? null;
+      if (handled !== expected.handled) score.problems.push(`handled: expected ${expected.handled}, got ${handled}`);
+    }
   }
   for (const extra of unmatched) {
     score.falsePositives[extra.type] += 1;

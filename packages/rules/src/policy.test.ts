@@ -141,6 +141,13 @@ describe("decideAction: create", () => {
     }
   });
 
+  it("always reviews a create its own burst already shows handled, even when it would auto-apply", () => {
+    expect(decideAction(create({ alreadyHandled: { status: "done", evidenceMessageIds: ["m2"] } }), baseCtx)).toEqual({
+      decision: { outcome: "review", reason: "already_handled" },
+      reviewType: "create",
+    });
+  });
+
   it("reviews ambiguous creates", () => {
     expect(decideAction(create({ ambiguityReasons: ["who should do it is unclear"] }), baseCtx)).toEqual({
       decision: { outcome: "review", reason: "ambiguous" },
