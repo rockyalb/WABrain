@@ -28,8 +28,8 @@ describe("person filter", () => {
   });
 
   it("finds a contact by part of the phone number", () => {
-    expect(labels("069 111")).toEqual(["Sam Carter"]);
-    expect(labels("069")).toEqual(["Sam Carter", "Samira Çelik"]);
+    expect(labels("07691 112")).toEqual(["Sam Carter"]);
+    expect(labels("0769")).toEqual(["Sam Carter", "Samira Çelik"]);
     expect(labels("69111")).toEqual(["Sam Carter"]);
     expect(labels("+44 7697 778")).toEqual(["Samira Çelik"]);
   });

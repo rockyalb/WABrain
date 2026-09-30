@@ -153,7 +153,7 @@ export function jidPhone(jid: string): string | null {
 export function filterOptions(options: ComboOption[], query: string): ComboOption[] {
   const words = foldText(query).split(/\s+/).filter(Boolean);
   if (!words.length) return options;
-  // Local numbers drop the leading 0 of the trunk prefix: "069 111" finds +355 69 111….
+  // Local numbers drop the leading 0 of the trunk prefix: "07691 112" finds +44 7691 112….
   const typed = query.replace(/\D/g, "");
   const digits = typed.replace(/^0+/, "");
   const first = words[0]!;

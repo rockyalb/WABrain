@@ -177,12 +177,12 @@ describe("POST /webhooks/openwa", () => {
   it("keeps an Off chat Off, as a bare identifier, across a full wipe", async () => {
     const offJid = "447690000611@s.whatsapp.net";
     const onJid = "447690000612@s.whatsapp.net";
-    const first = makeOpenWaEnvelope({ data: { chatId: offJid, from: offJid, contact: { name: "Dritan" } } });
+    const first = makeOpenWaEnvelope({ data: { chatId: offJid, from: offJid, contact: { name: "Daniel" } } });
     const other = makeOpenWaEnvelope({ data: { chatId: onJid, from: onJid, contact: { name: "Ema" } } });
     await deliver(first);
     await deliver(other);
     await waitFor(async () => ((await messagesFor(first.data.id)).length && (await messagesFor(other.data.id)).length ? true : null));
-    const found = (await (await h.request("/v1/chats?q=Dritan", { headers: auth })).json()) as { items: { id: string }[] };
+    const found = (await (await h.request("/v1/chats?q=Daniel", { headers: auth })).json()) as { items: { id: string }[] };
     const chatId = found.items[0]!.id;
     expect((await h.request(`/v1/chats/${chatId}`, { method: "PATCH", headers: auth, json: { mode: "off", aliases: ["DD"] } })).status).toBe(200);
 
@@ -200,7 +200,7 @@ describe("POST /webhooks/openwa", () => {
       .where(eq(schema.auditEvents.action, "data.wiped"));
     expect(event?.details).toEqual({ keptOffChats: listed.items.length });
 
-    const later = makeOpenWaEnvelope({ data: { chatId: offJid, from: offJid, contact: { name: "Dritan" }, body: "private" } });
+    const later = makeOpenWaEnvelope({ data: { chatId: offJid, from: offJid, contact: { name: "Daniel" }, body: "private" } });
     const response = await deliver(later);
     expect(response.status).toBe(202);
     expect(await response.json()).toEqual({ accepted: true, stored: false });

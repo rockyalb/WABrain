@@ -172,7 +172,7 @@ changed after the cursor.
 
 ```json
 { "type": "sync" }
-{ "type": "review",   "notificationId": "…", "reviewItemId": "…", "reviewType": "create|possibly_done|…", "title": "…", "from": "Arben · Zyra" }
+{ "type": "review",   "notificationId": "…", "reviewItemId": "…", "reviewType": "create|possibly_done|…", "title": "…", "from": "Ana · Office" }
 { "type": "reminder", "notificationId": "…", "taskId": "…", "title": "…", "dueAt": "…" }
 { "type": "summary",  "notificationId": "…", "open": 12, "dueToday": 3, "overdue": 1, "review": 2 }
 ```
