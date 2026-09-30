@@ -10,6 +10,14 @@ It runs on your own server with Docker Compose, connects to WhatsApp through
 [OpenWA](https://github.com/rmyndharis/OpenWA) (Baileys engine), and comes with
 a native Android app, a home-screen widget, and an installable web app.
 
+<p align="center">
+  <a href="docs/media/wabrain-explainer.mp4">
+    <img src="docs/media/wabrain-teaser.gif" width="300" alt="WABrain explainer: a chat message turns into a task and closes itself when you say it's done">
+  </a>
+  <br>
+  <sub><a href="docs/media/wabrain-explainer.mp4">▶ Watch the 54-second explainer</a> (sound on)</sub>
+</p>
+
 [![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE.md)
 
 > WABrain is an independent project. It is not affiliated with, endorsed by, or
