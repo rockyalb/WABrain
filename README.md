@@ -18,7 +18,7 @@ a native Android app, a home-screen widget, and an installable web app.
   <sub><a href="docs/media/wabrain-explainer.mp4">▶ Watch the 54-second explainer</a> (sound on)</sub>
 </p>
 
-[![License: FSL-1.1-ALv2](https://img.shields.io/badge/license-FSL--1.1--ALv2-blue)](LICENSE.md)
+[![License: AGPL-3.0](https://img.shields.io/badge/license-AGPL--3.0-blue)](LICENSE)
 
 > WABrain is an independent project. It is not affiliated with, endorsed by, or
 > sponsored by WhatsApp or Meta. WhatsApp is a trademark of Meta Platforms, Inc.
@@ -163,25 +163,22 @@ filters and policy), `packages/db` (schema and repositories), `packages/jobs`
 (pipeline), `packages/openwa-adapter` (read-only OpenWA client),
 `packages/notify` (push), `packages/contracts` (shared types and OpenAPI).
 
-## License and commercial use
+## License
 
-WABrain is **source-available** under the
-[Functional Source License 1.1, Apache 2.0 future license](LICENSE.md)
-(FSL-1.1-ALv2):
+WABrain is **free and open source** under the
+[GNU Affero General Public License v3.0](LICENSE) (AGPL-3.0):
 
-- **Free** to use, modify, and self-host for yourself or inside your own
-  company, and for non-commercial education and research.
-- **Not allowed without a partnership:** offering WABrain, or something
-  substantially similar built from it, to others as a commercial product or
-  service (for example a hosted WABrain subscription or a resold app).
-- Each release becomes available under the **Apache License 2.0** two years
-  after it is published.
+- **Free** to use, study, modify, and self-host, for yourself, your family, or
+  your company.
+- **Share your changes if you serve them.** If you run a modified WABrain for
+  other people over a network (for example a hosted service), you must offer
+  those users the source code of your version under the same license.
 
-Want to offer WABrain commercially, host it for customers, or build on it?
-Get in touch through [my GitHub profile](https://github.com/rockyalb).
+Want a different license, a hosted instance, or a partnership? Get in touch
+through [my GitHub profile](https://github.com/rockyalb).
 
 ## Contributing
 
 Issues and ideas are welcome. Pull requests are not accepted at the moment; you
-are free to fork the project and change it for any use the license permits. See
+are free to fork the project and change it under the terms of the AGPL. See
 [CONTRIBUTING.md](CONTRIBUTING.md).

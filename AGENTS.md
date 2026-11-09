@@ -59,7 +59,6 @@ Tests need PostgreSQL with pgvector (`pgvector/pgvector:pg17`).
 
 ## License
 
-FSL-1.1-ALv2 (see `LICENSE.md`). Internal and non-commercial use, modification,
-and forks are permitted; offering WABrain or a substantially similar product
-to others commercially is a Competing Use and needs a partnership with the
-author. Pull requests are not accepted.
+AGPL-3.0-only (see `LICENSE`). Anyone may use, modify, and self-host WABrain;
+whoever offers a modified version to others over a network must share its
+source under the same license. Pull requests are not accepted.

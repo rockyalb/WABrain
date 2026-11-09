@@ -1,6 +1,6 @@
 # WABrain
 
-> Self-hosted AI task manager and memory for WhatsApp. WABrain reads WhatsApp chats (read-only) through OpenWA's Baileys engine, turns requests and promises into to-dos, closes them when the chat says they are done, learns people and contexts, and answers questions about chat history with citations. It runs on your own server with Docker Compose and has a native Android app, a home-screen widget, and a web app. It never sends WhatsApp messages. License: FSL-1.1-ALv2 (free to self-host and use internally; commercial resale or hosting requires a partnership with the author; each release becomes Apache 2.0 after two years).
+> Self-hosted AI task manager and memory for WhatsApp. WABrain reads WhatsApp chats (read-only) through OpenWA's Baileys engine, turns requests and promises into to-dos, closes them when the chat says they are done, learns people and contexts, and answers questions about chat history with citations. It runs on your own server with Docker Compose and has a native Android app, a home-screen widget, and a web app. It never sends WhatsApp messages. License: AGPL-3.0, free and open source (free to use, modify, and self-host; a modified version offered over a network must share its source).
 
 Keywords: WhatsApp productivity, WhatsApp to-do list, WhatsApp task manager, WhatsApp AI assistant, WhatsApp CRM memory, self-hosted, Baileys, OpenWA, voice note transcription, chat search, Android widget.
 
@@ -18,5 +18,5 @@ Keywords: WhatsApp productivity, WhatsApp to-do list, WhatsApp task manager, Wha
 
 - [Security model](https://github.com/rockyalb/WABrain/blob/main/docs/SECURITY.md)
 - [AGENTS.md](https://github.com/rockyalb/WABrain/blob/main/AGENTS.md): repository guide for coding agents
-- [License](https://github.com/rockyalb/WABrain/blob/main/LICENSE.md)
-- [Contact for commercial use and partnerships](https://github.com/rockyalb)
+- [License](https://github.com/rockyalb/WABrain/blob/main/LICENSE)
+- [Contact for licensing and partnerships](https://github.com/rockyalb)
