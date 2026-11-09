@@ -39,7 +39,7 @@ export async function getSettings(db: Db): Promise<Settings> {
 }
 
 export type SettingsPatch = Partial<
-  Pick<Settings, "timezone" | "endOfWorkDay" | "dailySummaryTime" | "remindersEnabled" | "reminderLeadMinutes">
+  Pick<Settings, "timezone" | "endOfWorkDay" | "dailySummaryTime" | "remindersEnabled" | "reminderLeadMinutes" | "autoCreateThreshold">
 >;
 export type PolicyPatch = Partial<Pick<Settings, "trialDays" | "autoCreateThreshold">>;
 

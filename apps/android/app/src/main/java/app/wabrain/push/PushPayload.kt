@@ -3,6 +3,7 @@ package app.wabrain.push
 import app.wabrain.data.api.ReviewItemType
 import app.wabrain.data.api.WabJson
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
@@ -24,6 +25,23 @@ sealed class PushPayload {
         val title: String,
         override val notificationId: String? = null,
         /** Who it came from ("Sam", "Sam · Office"); null when the server does not say. */
+        val from: String? = null,
+        /** link only: a contact still has to be picked, so there is nothing to accept from the notification. */
+        val needsPick: Boolean = false,
+        /**
+         * create only: "done" or "cancelled" when a later message shows it already handled. The
+         * notification then offers saving it closed or discarding it, replacing the earlier one.
+         */
+        val handled: String? = null,
+    ) : PushPayload()
+
+    /** A create the server saved straight into Done or Cancelled because its chat showed it handled. */
+    data class Handled(
+        val taskId: String,
+        val title: String,
+        /** "done" or "cancelled". */
+        val status: String,
+        override val notificationId: String? = null,
         val from: String? = null,
     ) : PushPayload()
 
@@ -66,7 +84,14 @@ sealed class PushPayload {
                         obj.string("title").orEmpty(),
                         notificationId,
                         obj.string("from")?.takeIf { it.isNotBlank() },
+                        needsPick = obj["needsPick"]?.jsonPrimitive?.booleanOrNull == true,
+                        handled = obj.string("handled")?.takeIf { it == "done" || it == "cancelled" },
                     )
+                }
+                "handled" -> {
+                    val id = obj.string("taskId") ?: return Unknown
+                    val status = obj.string("status")?.takeIf { it == "done" || it == "cancelled" } ?: return Unknown
+                    Handled(id, obj.string("title").orEmpty(), status, notificationId, obj.string("from")?.takeIf { it.isNotBlank() })
                 }
                 "reminder" -> {
                     val id = obj.string("taskId") ?: return Unknown

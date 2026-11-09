@@ -20,7 +20,7 @@ describe("sync", () => {
     const full = await readSync(database, null);
     expect(full.full).toBe(true);
     expect(full.contexts.map((c) => c.name).sort()).toEqual(["Personal", "Work"]);
-    expect(full.settings).toMatchObject({ timezone: "UTC", endOfWorkDay: "17:00", trialDays: 7, autoCreateThreshold: 0.85 });
+    expect(full.settings).toMatchObject({ timezone: "UTC", endOfWorkDay: "17:00", trialDays: 0, autoCreateThreshold: 0.8 });
 
     const empty = await readSync(database, full.cursor);
     expect(empty).toMatchObject({ full: false, tasks: [], contexts: [], chats: [], people: [] });

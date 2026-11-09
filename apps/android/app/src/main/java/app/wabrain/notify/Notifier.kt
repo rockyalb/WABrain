@@ -9,6 +9,7 @@ import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
+import android.os.Bundle
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
@@ -26,6 +27,7 @@ object Notifier {
     const val CHANNEL_REVIEW = "review"
     const val CHANNEL_REMINDERS = "reminders"
     const val CHANNEL_SUMMARY = "summary"
+    const val CHANNEL_AUTOMATIC = "automatic"
 
     private const val GROUP_REVIEW = "app.wabrain.REVIEW"
     private const val GROUP_REMINDERS = "app.wabrain.REMINDERS"
@@ -33,6 +35,8 @@ object Notifier {
     private const val SUMMARY_ID_REMINDERS = 1002
     private const val DAILY_SUMMARY_ID = 1003
     private const val MAX_SUMMARY_LINES = 5
+    /** The Review item a review notification stands for, so a sync can withdraw it once decided elsewhere. */
+    private const val EXTRA_REVIEW_ITEM_ID = "app.wabrain.reviewItemId"
 
     fun createChannels(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java) ?: return
@@ -53,6 +57,11 @@ object Notifier {
                         description = context.getString(R.string.channel_summary_description)
                         lockscreenVisibility = Notification.VISIBILITY_PRIVATE
                     },
+                NotificationChannel(CHANNEL_AUTOMATIC, context.getString(R.string.channel_automatic), NotificationManager.IMPORTANCE_DEFAULT)
+                    .apply {
+                        description = context.getString(R.string.channel_automatic_description)
+                        lockscreenVisibility = Notification.VISIBILITY_PRIVATE
+                    },
             ),
         )
     }
@@ -68,6 +77,7 @@ object Notifier {
             is PushPayload.Review -> review(context, payload)
             is PushPayload.Reminder -> reminder(context, payload)
             is PushPayload.Summary -> summary(context, payload)
+            is PushPayload.Handled -> handled(context, payload)
             PushPayload.Sync, PushPayload.Unknown -> false
         }
 
@@ -75,21 +85,45 @@ object Notifier {
 
     private fun reminderNotificationId(taskId: String): Int = ("reminder:$taskId").hashCode()
 
+    private fun handledNotificationId(taskId: String): Int = ("handled:$taskId").hashCode()
+
     private fun review(context: Context, payload: PushPayload.Review): Boolean {
         val id = reviewNotificationId(payload.reviewItemId)
+        // Same id as the item's first notification: a create now shown already handled replaces it.
+        val handled = payload.handled?.takeIf { payload.reviewType == ReviewItemType.CREATE }
         val heading = context.getString(
             when (payload.reviewType) {
-                ReviewItemType.CREATE -> R.string.review_type_create
+                ReviewItemType.CREATE -> when (handled) {
+                    "done" -> R.string.review_type_create_done
+                    "cancelled" -> R.string.review_type_create_cancelled
+                    else -> R.string.review_type_create
+                }
                 ReviewItemType.POSSIBLY_DONE -> R.string.review_type_possibly_done
                 ReviewItemType.POSSIBLY_CANCELLED -> R.string.review_type_possibly_cancelled
                 ReviewItemType.RESCHEDULE -> R.string.review_type_reschedule
                 ReviewItemType.MERGE -> R.string.review_type_merge
+                ReviewItemType.LINK -> if (payload.needsPick) R.string.review_type_link_pick else R.string.review_type_link
                 ReviewItemType.UNKNOWN -> R.string.review_type_unknown
             },
         )
         val confirmation = payload.reviewType.isConfirmation
-        val acceptLabel = context.getString(if (confirmation) R.string.action_done else R.string.action_accept)
-        val rejectLabel = context.getString(if (confirmation) R.string.action_not_yet else R.string.action_reject)
+        val link = payload.reviewType == ReviewItemType.LINK
+        val acceptLabel = context.getString(
+            when {
+                handled == "done" -> R.string.action_save_as_done
+                handled == "cancelled" -> R.string.action_save_as_cancelled
+                confirmation -> R.string.action_done
+                else -> R.string.action_accept
+            },
+        )
+        val rejectLabel = context.getString(
+            when {
+                handled != null -> R.string.action_discard
+                confirmation -> R.string.action_not_yet
+                link -> R.string.action_remove
+                else -> R.string.action_reject
+            },
+        )
 
         val publicVersion = NotificationCompat.Builder(context, CHANNEL_REVIEW)
             .setSmallIcon(R.drawable.ic_notification)
@@ -109,8 +143,14 @@ object Notifier {
             .setPublicVersion(publicVersion)
             .setGroup(GROUP_REVIEW)
             .setAutoCancel(true)
+            .addExtras(Bundle().apply { putString(EXTRA_REVIEW_ITEM_ID, payload.reviewItemId) })
             .setContentIntent(activityIntent(context, id, MainActivity.reviewIntent(context, payload.reviewItemId)))
-            .addAction(0, acceptLabel, ReviewActionReceiver.pendingIntent(context, payload.reviewItemId, accept = true, notificationId = id))
+            // "Who is Robin?" has nothing to accept yet: tapping opens Review to pick the contact.
+            .apply {
+                if (!payload.needsPick) {
+                    addAction(0, acceptLabel, ReviewActionReceiver.pendingIntent(context, payload.reviewItemId, accept = true, notificationId = id, closeAs = handled))
+                }
+            }
             .addAction(0, rejectLabel, ReviewActionReceiver.pendingIntent(context, payload.reviewItemId, accept = false, notificationId = id))
             .build()
         val posted = post(context, id, notification)
@@ -185,6 +225,28 @@ object Notifier {
         return posted
     }
 
+    /** "Saved as done": nothing to decide; tapping opens the task, where it can be reopened. */
+    private fun handled(context: Context, payload: PushPayload.Handled): Boolean {
+        val id = handledNotificationId(payload.taskId)
+        val heading = context.getString(if (payload.status == "cancelled") R.string.notification_saved_cancelled else R.string.notification_saved_done)
+        val publicVersion = NotificationCompat.Builder(context, CHANNEL_AUTOMATIC)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(context.getString(R.string.notification_public_automatic))
+            .build()
+        val notification = NotificationCompat.Builder(context, CHANNEL_AUTOMATIC)
+            .setSmallIcon(R.drawable.ic_notification)
+            .setContentTitle(payload.from ?: heading)
+            .setContentText(payload.title)
+            .apply { if (payload.from != null) setSubText(heading) }
+            .setStyle(NotificationCompat.BigTextStyle().bigText(payload.title))
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(publicVersion)
+            .setAutoCancel(true)
+            .setContentIntent(activityIntent(context, id, MainActivity.taskIntent(context, payload.taskId)))
+            .build()
+        return post(context, id, notification)
+    }
+
     private fun summary(context: Context, payload: PushPayload.Summary): Boolean {
         val text = context.getString(R.string.notification_summary_text, payload.dueToday, payload.overdue, payload.review, payload.open)
         val publicVersion = NotificationCompat.Builder(context, CHANNEL_SUMMARY)
@@ -235,6 +297,19 @@ object Notifier {
 
     fun cancel(context: Context, id: Int) {
         NotificationManagerCompat.from(context).cancel(id)
+    }
+
+    /**
+     * Withdraws review notifications whose item is no longer pending (decided on another device or in
+     * the web app). Only notifications posted before [postedBefore] are judged, so one that arrived
+     * while the sync was in flight is not mistaken for a decided item.
+     */
+    fun pruneReviews(context: Context, pendingIds: Set<String>, postedBefore: Long) {
+        val manager = context.getSystemService(NotificationManager::class.java) ?: return
+        manager.activeNotifications
+            .filter { it.notification.group == GROUP_REVIEW && it.id != SUMMARY_ID_REVIEW && it.postTime < postedBefore }
+            .filter { active -> active.notification.extras.getString(EXTRA_REVIEW_ITEM_ID)?.let { it !in pendingIds } == true }
+            .forEach { cancelReview(context, it.id) }
     }
 
     /** Removes a review notification and updates the group summary: fewer lines, or gone with the last item. */

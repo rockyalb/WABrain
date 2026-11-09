@@ -89,8 +89,13 @@ class ApiClient(
 
     // ---------------------------------------------------------------- tasks
 
-    suspend fun listTasks(status: String, cursor: String? = null): PageDto<TaskDto> =
-        get(path("v1", "tasks"), PageDto.serializer(TaskDto.serializer()), mapOf("status" to status, "cursor" to cursor))
+    /** [status] "closed" lists done and cancelled together, newest closed first; [personId] narrows to one contact. */
+    suspend fun listTasks(status: String, cursor: String? = null, personId: String? = null, limit: Int? = null, sort: String? = null): PageDto<TaskDto> =
+        get(
+            path("v1", "tasks"),
+            PageDto.serializer(TaskDto.serializer()),
+            mapOf("status" to status, "cursor" to cursor, "personId" to personId, "limit" to limit?.toString(), "sort" to sort),
+        )
 
     suspend fun taskDetail(id: String): TaskDetailResponse =
         get(path("v1", "tasks", id), TaskDetailResponse.serializer())

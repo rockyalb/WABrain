@@ -1,6 +1,6 @@
 import type { JSX } from "preact";
 import { useEffect, useState } from "preact/hooks";
-import type { Chat } from "./model";
+import type { Chat, Person } from "./model";
 import { ContextBadge, EmptyState, useWorkspace, WorkspaceHeader } from "./Workspace";
 import { displayTime } from "./model";
 
@@ -28,6 +28,18 @@ export function ChatsView(props: { hash: string }) {
   </>;
 }
 
+/** A direct chat's context, read-only: it is the person's, changed or confirmed on their page. */
+function PersonContext(props: { person: Person }) {
+  const { data, api, run, busy } = useWorkspace();
+  const context = data.contexts.find((item) => item.id === props.person.defaultContextId);
+  const href = `#/people/${encodeURIComponent(props.person.id)}`;
+  const suggested = Boolean(context) && !props.person.contextConfirmed;
+  return <div class="ws-person-context"><span class="ws-person-context-label">Context</span>
+    <div class="ws-person-context-value">{context ? <ContextBadge name={context.name} color={context.color} /> : <span class="ws-muted">None</span>}
+      {suggested ? <><span class="ws-pill attention">Suggested</span><button type="button" class="ws-text-button" disabled={busy} onClick={() => void run(() => api.updatePerson(props.person.id, { contextConfirmed: true }))}>Confirm</button></> : null}</div>
+    <p class="ws-hint">Comes from <a href={href}>{props.person.displayName}</a>. Change it on their page.</p></div>;
+}
+
 function ChatView(props: { id: string; hash: string }) {
   const { data, api, run, busy } = useWorkspace();
   const chat = data.chats.find((item) => item.id === props.id);
@@ -47,11 +59,13 @@ function ChatView(props: { id: string; hash: string }) {
     void api.messages(props.id, around).then((result) => { setMessages(result.items); setMessageError(null); }, () => { setMessages([]); setMessageError("Conversation unavailable."); });
   }, [props.id, around]);
   if (!chat) return <><a class="ws-back" href="#/chats">← Chats</a><div class="ws-panel">Chat not found.</div></>;
+  // A direct chat's context is its person's, set on their page; groups have their own.
+  const person = !chat.isGroup && chat.personId ? data.people.find((item) => item.id === chat.personId) : undefined;
   const save = (event: JSX.TargetedEvent<HTMLFormElement, Event>) => {
     event.preventDefault();
     if (mode === "off" && chat.mode !== "off" && !window.confirm("Turning this chat off deletes its stored messages and media. Continue?")) return;
     void run(() => api.updateChat(chat.id, {
-      mode, defaultContextId: contextId || null, contextConfirmed: true, autoCreate,
+      mode, ...(person ? {} : { defaultContextId: contextId || null, contextConfirmed: true }), autoCreate,
       minimumAutoConfidence: confidence === "" ? null : Number(confidence),
       aliases: aliases.split(",").map((value) => value.trim()).filter(Boolean),
     }));
@@ -61,8 +75,10 @@ function ChatView(props: { id: string; hash: string }) {
     <WorkspaceHeader eyebrow={chat.isGroup ? "Group conversation" : "Direct conversation"} title={chat.name ?? chat.jid} description={chat.jid} />
     <div class="ws-detail-grid"><section class="ws-panel"><h2>Chat rules</h2><form class="ws-form" onSubmit={save}>
       <label>Analysis mode<select value={mode} onChange={(event) => setMode(event.currentTarget.value as Chat["mode"])}><option value="on">On — analyze messages</option>{chat.isGroup ? <option value="mentions_only">Mentions only</option> : null}<option value="off">Off — don't store messages</option></select></label>
-      <label>Default context<select value={contextId} onChange={(event) => setContextId(event.currentTarget.value)}><option value="">None</option>{data.contexts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
-      {!chat.contextConfirmed ? <p class="ws-hint">This context is a suggestion. Saving confirms your choice.</p> : null}
+      {person ? <PersonContext person={person} /> : <>
+        <label>Group context<select value={contextId} onChange={(event) => setContextId(event.currentTarget.value)}><option value="">None</option>{data.contexts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+        {!chat.contextConfirmed ? <p class="ws-hint">{chat.defaultContextId ? "This context is a suggestion. Saving confirms your choice." : "Pick a context for tasks from this group."}</p> : null}
+      </>}
       <label class="ws-checkbox"><input type="checkbox" checked={autoCreate} onChange={(event) => setAutoCreate(event.currentTarget.checked)} /> Allow automatic task creation when policy permits</label>
       <label>Minimum confidence override <input type="number" min="0" max="1" step="0.01" placeholder="Use global threshold" value={confidence} onInput={(event) => setConfidence(event.currentTarget.value)} /></label>
       <label>Mention aliases, separated by commas<input value={aliases} onInput={(event) => setAliases(event.currentTarget.value)} placeholder="Names people use for you" /></label>

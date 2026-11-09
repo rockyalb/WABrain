@@ -178,7 +178,7 @@ const routes: Record<string, Partial<Record<"get" | "post" | "patch" | "put" | "
     delete: { summary: "Delete a context", security: "device", params: idParam(), query: S.DeleteContextQuerySchema, responses: { 204: null }, mutating: true },
   },
   "/v1/settings": {
-    get: { summary: "Settings, with the read-only auto-create status", security: "device", responses: { 200: S.SettingsResponseSchema } },
+    get: { summary: "Settings", security: "device", responses: { 200: SettingsSchema } },
     patch: { summary: "Edit settings", security: "device", body: S.UpdateSettingsRequestSchema, responses: { 200: SettingsSchema }, mutating: true },
   },
   "/v1/push-endpoints": {

@@ -13,10 +13,15 @@ import app.wabrain.data.db.OutboxEntity
 import app.wabrain.data.db.TaskEntity
 import app.wabrain.data.db.action
 import app.wabrain.data.db.dto
+import app.wabrain.data.db.encodeLinks
 import app.wabrain.data.db.encodeStringList
+import app.wabrain.data.db.links
 import app.wabrain.data.db.reviewType
 import app.wabrain.data.db.toEntity
 import app.wabrain.domain.Instants
+import app.wabrain.domain.LinkInput
+import app.wabrain.domain.TaskLinks
+import app.wabrain.domain.TaskSource
 import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
@@ -79,7 +84,7 @@ class TaskRepository(
         db.withTransaction {
             val task = db.tasks().get(id) ?: return@withTransaction
             db.tasks().upsert(
-                task.copy(status = status, closedAt = if (status == "open") null else now, updatedAt = now),
+                task.copy(status = status, closedAt = if (status == "open") null else now, closedBy = if (status == "open") null else "owner", updatedAt = now),
             )
             enqueue("POST", ApiClient.path("v1", "tasks", id, verb), "{}", OutboxEntity.TYPE_TASK, id, null)
         }
@@ -122,6 +127,7 @@ class TaskRepository(
                     createdAt = now,
                     updatedAt = now,
                     closedAt = null,
+                    createdBy = "owner",
                 ),
             )
             val body = WabJson.encodeToString(CreateTaskRequest.serializer(), request)
@@ -169,6 +175,25 @@ class TaskRepository(
     }
 
     /**
+     * Replaces the task's links (see [TaskLinks]): picks a chat for an unconfirmed name, removes a
+     * link, or adds one by hand. Shown at once; the PATCH waits in the outbox.
+     */
+    suspend fun updateLinks(id: String, inputs: List<LinkInput>) {
+        val now = clock()
+        db.withTransaction {
+            val task = db.tasks().get(id) ?: return@withTransaction
+            val chatsById = db.chats().all().associateBy { it.id }
+            val peopleById = db.people().all().associateBy { it.id }
+            val links = TaskLinks.apply(task.links, inputs, task.chatId) { TaskSource.chatName(it, chatsById, peopleById) }
+            if (links == task.links) return@withTransaction
+            db.tasks().upsert(task.copy(linksJson = encodeLinks(links), updatedAt = now))
+            val patch = buildJsonObject { put("links", TaskLinks.toJson(inputs)) }
+            enqueue("PATCH", ApiClient.path("v1", "tasks", id), patch.toString(), OutboxEntity.TYPE_TASK, id, null)
+        }
+        afterMutation()
+    }
+
+    /**
      * Accepts or rejects a review item. For possibly_done / possibly_cancelled,
      * accept means Done and reject means Not yet. [edits] may override
      * title, description, dueAt, contextId or kind of a create. [closeAs] ("done" or
@@ -185,8 +210,8 @@ class TaskRepository(
                 val task = db.tasks().get(taskId)
                 if (task != null) {
                     val updated = when (item.reviewType) {
-                        ReviewItemType.POSSIBLY_DONE -> task.copy(status = "done", closedAt = now, updatedAt = now)
-                        ReviewItemType.POSSIBLY_CANCELLED -> task.copy(status = "cancelled", closedAt = now, updatedAt = now)
+                        ReviewItemType.POSSIBLY_DONE -> task.copy(status = "done", closedAt = now, closedBy = "owner", updatedAt = now)
+                        ReviewItemType.POSSIBLY_CANCELLED -> task.copy(status = "cancelled", closedAt = now, closedBy = "owner", updatedAt = now)
                         ReviewItemType.RESCHEDULE -> (item.action as? TaskActionDto.Reschedule)?.let {
                             task.copy(dueAt = Instants.parseMillis(it.dueAt), dueHasTime = it.dueHasTime, updatedAt = now)
                         }

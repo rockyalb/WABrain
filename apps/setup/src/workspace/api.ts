@@ -1,7 +1,10 @@
 import type { Api } from "../api";
+import type { TaskSort } from "@wabrain/contracts";
 import type { AskResponse, Chat, Context, MessageView, Person, ReviewItem, Settings, SyncResponse, Task, TaskDetail } from "./model";
 
-export type TaskPatch = Partial<Pick<Task, "title" | "description" | "kind" | "contextId" | "dueAt" | "dueHasTime">>;
+/** One entry of a task's link list: chatId links that chat; null keeps the unconfirmed link with this name. */
+export interface LinkInput { name?: string | null; chatId: string | null }
+export type TaskPatch = Partial<Pick<Task, "title" | "description" | "kind" | "contextId" | "dueAt" | "dueHasTime">> & { links?: LinkInput[] };
 export type NewTask = TaskPatch & { title: string; kind: Task["kind"]; chatId?: string | null; personId?: string | null };
 
 const id = encodeURIComponent;
@@ -12,7 +15,7 @@ export function workspaceApi(api: Api) {
     sync: (cursor?: string | null) => call<SyncResponse>("GET", `/web/sync${cursor ? `?since=${id(cursor)}` : ""}`),
     snapshot: () => call<SyncResponse>("GET", "/web/sync"),
     task: (taskId: string) => call<TaskDetail>("GET", `/web/tasks/${id(taskId)}`),
-    closedTasks: (personId: string, cursor?: string | null) => call<{ items: Task[]; nextCursor: string | null }>("GET", `/web/tasks?status=closed&limit=50&personId=${id(personId)}${cursor ? `&cursor=${id(cursor)}` : ""}`),
+    closedTasks: (personId: string, cursor?: string | null, sort: TaskSort = "default") => call<{ items: Task[]; nextCursor: string | null }>("GET", `/web/tasks?status=closed&limit=50&personId=${id(personId)}&sort=${sort}${cursor ? `&cursor=${id(cursor)}` : ""}`),
     createTask: (draft: NewTask) => call<Task>("POST", "/web/tasks", draft),
     updateTask: (taskId: string, patch: TaskPatch) => call<Task>("PATCH", `/web/tasks/${id(taskId)}`, patch),
     taskStatus: (taskId: string, action: "complete" | "reopen" | "cancel") => call<Task>("POST", `/web/tasks/${id(taskId)}/${action}`, {}),
@@ -20,7 +23,7 @@ export function workspaceApi(api: Api) {
     review: (reviewId: string) => call<{ reviewItem: ReviewItem | null; task: Task | null }>("GET", `/web/review/${id(reviewId)}`),
     decide: (reviewId: string, accept: boolean, edits?: TaskPatch, closeAs?: "done" | "cancelled") => call<{ reviewItem: ReviewItem; task?: Task | null }>("POST", `/web/review/${id(reviewId)}/${accept ? "accept" : "reject"}`, accept ? { edits, closeAs } : {}),
     person: (personId: string) => call<Person>("GET", `/web/people/${id(personId)}`),
-    updatePerson: (personId: string, patch: Partial<Pick<Person, "displayName" | "defaultContextId">>) => call<Person>("PATCH", `/web/people/${id(personId)}`, patch),
+    updatePerson: (personId: string, patch: Partial<Pick<Person, "displayName" | "defaultContextId" | "contextConfirmed">>) => call<Person>("PATCH", `/web/people/${id(personId)}`, patch),
     addFact: (personId: string, key: Person["facts"][number]["key"], value: string) => call<Person["facts"][number]>("POST", `/web/people/${id(personId)}/facts`, { key, value }),
     updateFact: (personId: string, factId: string, patch: { value?: string; verified?: boolean }) => call<Person["facts"][number]>("PATCH", `/web/people/${id(personId)}/facts/${id(factId)}`, patch),
     deleteFact: (personId: string, factId: string) => call<void>("DELETE", `/web/people/${id(personId)}/facts/${id(factId)}`),

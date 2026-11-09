@@ -1,5 +1,5 @@
 import { createMockProviders, mockTranscriptionModel, parseAnalysisPrompt, scriptedJsonModel } from "@wabrain/agent/testing";
-import { PROMPT_VERSION, type Providers } from "@wabrain/agent";
+import type { Providers } from "@wabrain/agent";
 import {
   TaskService,
   findChatByJid,
@@ -13,7 +13,7 @@ import {
   type ChangeEvent,
   type IntakeScheduler,
 } from "@wabrain/db";
-import { createTestDatabase, makeOpenWaEnvelope, seedTaskCalibration, type TestDatabase } from "@wabrain/db/testing";
+import { createTestDatabase, makeOpenWaEnvelope, type TestDatabase } from "@wabrain/db/testing";
 import { PushNotifier, type PushPayload } from "@wabrain/notify";
 import { createRulesIntakeFilter } from "@wabrain/rules";
 import { eq, sql } from "drizzle-orm";
@@ -121,7 +121,7 @@ function taskModel() {
       if (lower.includes("contract")) {
         actions.push({
           type: "create", kind: "todo", title: "Send the contract", description: "Sam asks for the contract.", language: "en",
-          due: { date: prompt.calendar.tomorrow, time: null }, taskId: null, taskIds: null, contextId: null, contextReason: null, handled: null,
+          due: { date: prompt.calendar.tomorrow, time: null }, taskId: null, taskIds: null, contextId: null, contextReason: null, handled: null, involves: null,
           confidence: 0.95, ambiguityReasons: [], evidenceMessageIds: [message.id],
         });
       }
@@ -129,7 +129,7 @@ function taskModel() {
       if ((lower.includes("sent") || lower.includes("done")) && target) {
         actions.push({
           type: "complete", kind: null, title: null, description: null, language: null, due: null,
-          taskId: target.id, taskIds: null, contextId: null, contextReason: null, handled: null,
+          taskId: target.id, taskIds: null, contextId: null, contextReason: null, handled: null, involves: null,
           confidence: 0.95, ambiguityReasons: [], evidenceMessageIds: [message.id],
         });
       }
@@ -149,12 +149,7 @@ describe("analysis job", () => {
   beforeEach(async () => {
     await updateSettings(testDb.database.db, { trialDays: 7 });
     await testDb.database.db.update(schema.settings).set({ trialStartedAt: new Date() });
-    await testDb.database.db.execute(sql`delete from app_state where key = 'task.calibration'`);
   });
-
-  /** The mock text model's profile, calibrated as if the owner had decided enough Review creates. */
-  const calibrateMockProfile = () =>
-    seedTaskCalibration(testDb.database.db, { provider: "mock", model: "mock-text", promptVersion: PROMPT_VERSION, threshold: 0.9 });
 
   /** Mock providers whose text model reports another model id. */
   function otherModelProviders(modelId: string): Providers {
@@ -163,21 +158,8 @@ describe("analysis job", () => {
     return { ...providers, text: { ...providers.text, modelId } };
   }
 
-  it("keeps creates in Review on an idle install after the 7-day trial when nothing was calibrated", async () => {
+  it("auto-creates after the trial on the threshold alone, whatever the model or prompt", async () => {
     await testDb.database.db.update(schema.settings).set({ trialStartedAt: new Date(Date.now() - 8 * 86_400_000) });
-    const jid = nextJid();
-    const stored = await ingest(makeOpenWaEnvelope({ data: { chatId: jid, from: jid, body: "send me the contract tomorrow" } }));
-    if (stored.status !== "stored") throw new Error(stored.status);
-    const h = harness({ providers: createMockProviders({ text: taskModel() }) });
-    expect(await runChatAnalysis(h.deps, stored.chatId)).toMatchObject({
-      outcomes: [{ type: "create", result: "review", decision: { reason: "calibration_required" } }],
-    });
-    expect(await testDb.database.db.select().from(schema.tasks).where(eq(schema.tasks.chatId, stored.chatId))).toHaveLength(0);
-  });
-
-  it("auto-creates for a calibrated profile and falls back to Review when the model or prompt changes", async () => {
-    await updateSettings(testDb.database.db, { trialDays: 0 });
-    await calibrateMockProfile();
     const analyze = async (providers: Providers) => {
       const jid = nextJid();
       const stored = await ingest(makeOpenWaEnvelope({ data: { chatId: jid, from: jid, body: "send me the contract tomorrow" } }));
@@ -187,14 +169,9 @@ describe("analysis job", () => {
     expect(await analyze(createMockProviders({ text: taskModel() }))).toMatchObject({
       outcomes: [{ type: "create", result: "applied", decision: { reason: "auto_create" } }],
     });
-    // Another model answering: its proposals have no owner decisions yet.
+    // A model with no Review decisions behind it is trusted the same way.
     expect(await analyze(otherModelProviders("mock-text-v2"))).toMatchObject({
-      outcomes: [{ type: "create", result: "review", decision: { reason: "calibration_required" } }],
-    });
-    // A calibration of the same model under another prompt version does not count either.
-    await seedTaskCalibration(testDb.database.db, { provider: "mock", model: "mock-text-v2", promptVersion: "task-analysis/older" });
-    expect(await analyze(otherModelProviders("mock-text-v2"))).toMatchObject({
-      outcomes: [{ type: "create", result: "review", decision: { reason: "calibration_required" } }],
+      outcomes: [{ type: "create", result: "applied", decision: { reason: "auto_create" } }],
     });
   });
 
@@ -223,7 +200,6 @@ describe("analysis job", () => {
 
   it("does not duplicate tasks when a job is retried after a crash mid-apply", async () => {
     await updateSettings(testDb.database.db, { trialDays: 0 });
-    await calibrateMockProfile();
     const jid = nextJid();
     await ingest(makeOpenWaEnvelope({ data: { chatId: jid, from: jid, body: "send me the contract tomorrow" } }));
     const stored = await ingest(makeOpenWaEnvelope({ data: { chatId: jid, from: jid, body: "the second contract too pls" } }));
@@ -261,7 +237,6 @@ describe("analysis job", () => {
 
   it("closes a task from the owner's message and asks Review for someone else's", async () => {
     await updateSettings(testDb.database.db, { trialDays: 0 });
-    await calibrateMockProfile();
     const jid = nextJid();
     const first = await ingest(makeOpenWaEnvelope({ data: { chatId: jid, from: jid, body: "send me the contract tomorrow" } }));
     if (first.status !== "stored") throw new Error(first.status);
@@ -302,7 +277,8 @@ describe("analysis job", () => {
       .limit(1);
     expect(run!.dropped).toEqual([{ index: 0, reason: "duplicate", type: "create" }]);
 
-    // The contact says it is done before the owner reviewed it: the pending item is flagged, nothing closes.
+    // The contact says it is done before the owner reviewed it: the pending item is flagged and re-announced
+    // (its notification now offers "Save as done"), nothing closes.
     h.events.length = 0;
     await ingest(makeOpenWaEnvelope({ data: { chatId: jid, from: jid, body: "done, got it" } }));
     const done = await runChatAnalysis(h.deps, first.chatId);
@@ -310,7 +286,7 @@ describe("analysis job", () => {
     const items = await pendingItems();
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({ state: "pending", handled: { status: "done", excerpt: "done, got it", fromOwner: false } });
-    expect(h.events).toEqual([{ type: "sync" }]);
+    expect(h.events).toEqual([{ type: "sync" }, { type: "notification" }]);
     expect(await testDb.database.db.select().from(schema.tasks).where(eq(schema.tasks.chatId, first.chatId))).toEqual([]);
   });
 
@@ -342,6 +318,78 @@ describe("analysis job", () => {
     expect(await runChatAnalysis(h.deps, stored.chatId)).toMatchObject({ status: "deferred", reason: "provider" });
     const [message] = await testDb.database.db.select().from(schema.messages).where(eq(schema.messages.chatId, stored.chatId));
     expect(message!.analysisRunId).toBeNull();
+  });
+
+  it("links a create to the chat it names, and that chat closes it", async () => {
+    await updateSettings(testDb.database.db, { trialDays: 0 });
+    const { db } = testDb.database;
+    const jordanJid = nextJid();
+    const caseyJid = nextJid();
+    const groupJid = `design-${jidSeq++}@g.us`;
+    const jordan = await ingest(makeOpenWaEnvelope({ data: { chatId: jordanJid, from: jordanJid, body: "hi there", contact: { name: "Jordan" } } }));
+    const group = { chatId: groupJid, from: groupJid, author: "447690000009@s.whatsapp.net", isGroup: true, chatName: "Design Team" };
+    const design = await ingest(makeOpenWaEnvelope({ data: { ...group, body: "good evening" } }));
+    if (jordan.status !== "stored" || design.status !== "stored") throw new Error("not stored");
+
+    const action = (overrides: Record<string, unknown>) => ({
+      type: "create", kind: "todo", title: null, description: "", language: "en", due: null, taskId: null, taskIds: null,
+      contextId: null, contextReason: null, handled: null, involves: null, confidence: 0.95, ambiguityReasons: [], evidenceMessageIds: [],
+      ...overrides,
+    });
+    // Casey's requests name Jordan or the Design group; in a linked chat, "the list"/"got it" closes the first linked task,
+    // and any other message there proposes a new task.
+    const model = scriptedJsonModel(({ text }) => {
+      const prompt = parseAnalysisPrompt(text);
+      const actions = [];
+      for (const message of prompt.newMessages) {
+        const lower = message.text.toLowerCase();
+        if (lower.startsWith("send")) actions.push(action({ title: "Send Jordan the list", involves: ["Jordan"], evidenceMessageIds: [message.id] }));
+        else if (lower.startsWith("tell")) actions.push(action({ title: "Tell the Design group", involves: ["Design group"], evidenceMessageIds: [message.id] }));
+        else if ((lower.includes("the list") || lower.includes("got it")) && prompt.linkedTasks[0]) {
+          actions.push(action({ type: "complete", kind: null, language: null, taskId: prompt.linkedTasks[0].id, evidenceMessageIds: [message.id] }));
+        } else if (prompt.linkedTasks.length > 0) actions.push(action({ title: "Something new", evidenceMessageIds: [message.id] }));
+      }
+      return { actions };
+    });
+    const h = harness({ providers: createMockProviders({ text: model }) });
+    await runChatAnalysis(h.deps, jordan.chatId);
+    await runChatAnalysis(h.deps, design.chatId);
+
+    const casey = await ingest(makeOpenWaEnvelope({ data: { chatId: caseyJid, from: caseyJid, body: "Send Jordan the list of remaining work", contact: { name: "Casey" } } }));
+    if (casey.status !== "stored") throw new Error(casey.status);
+    expect(await runChatAnalysis(h.deps, casey.chatId)).toMatchObject({ outcomes: [{ type: "create", result: "applied" }] });
+    const [task] = await db.select().from(schema.tasks).where(eq(schema.tasks.chatId, casey.chatId));
+    expect(task!.links).toEqual([{ name: "Jordan", chatId: jordan.chatId, candidates: [], source: "ai" }]);
+    // Created on its own, so the owner is asked to confirm the contact (with an Accept in the notification).
+    const [confirm] = await db.select().from(schema.reviewItems).where(eq(schema.reviewItems.taskId, task!.id));
+    expect(confirm).toMatchObject({ type: "link", state: "pending", reason: "link_confirmation" });
+    expect(h.events).toContainEqual(expect.objectContaining({ type: "review", reviewType: "link", title: "Send Jordan the list → Jordan" }));
+
+    // The owner sends Jordan the list: Jordan's chat closes Casey's task.
+    await ingest(makeOpenWaEnvelope({ event: "message.sent", data: { chatId: jordanJid, from: OWNER, to: jordanJid, fromMe: true, body: "Jordan here is the list of remaining work" } }));
+    expect(await runChatAnalysis(h.deps, jordan.chatId)).toMatchObject({
+      outcomes: [{ type: "complete", result: "applied", taskId: task!.id, decision: { reason: "owner_evidence" } }],
+    });
+    const [closed] = await db.select().from(schema.tasks).where(eq(schema.tasks.id, task!.id));
+    expect(closed!.status).toBe("done");
+
+    // A mentions-only group with a linked task: unmentioned messages are analyzed only to close it.
+    await ingest(makeOpenWaEnvelope({ data: { chatId: caseyJid, from: caseyJid, body: "Tell the Design group about the meeting", contact: { name: "Casey" } } }));
+    await runChatAnalysis(h.deps, casey.chatId);
+    const [groupTask] = await db.select().from(schema.tasks).where(eq(schema.tasks.title, "Tell the Design group"));
+    expect(groupTask!.links).toEqual([{ name: "Design group", chatId: design.chatId, candidates: [], source: "ai" }]);
+    await ingest(makeOpenWaEnvelope({ data: { ...group, body: "got it, the meeting is on Friday" } }));
+    await ingest(makeOpenWaEnvelope({ data: { ...group, body: "who is coming for coffee?" } }));
+    const groupRun = await runChatAnalysis(h.deps, design.chatId);
+    if (groupRun.status !== "analyzed") throw new Error(groupRun.status);
+    // Both messages arrive in the same second, so their order is not fixed.
+    expect(groupRun.outcomes).toHaveLength(2);
+    expect(groupRun.outcomes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ type: "complete", result: "review", reviewType: "possibly_done", taskId: groupTask!.id, decision: { outcome: "review", reason: "non_owner_evidence" } }),
+        expect.objectContaining({ type: "create", result: "dropped", decision: { outcome: "drop", reason: "linked_only" } }),
+      ]),
+    );
   });
 
   it("stores group messages without a mention as context only", async () => {
@@ -634,6 +682,9 @@ describe("profile job", () => {
 
     const chat = await findChatByJid(testDb.database.db, jid);
     const [work] = await testDb.database.db.select().from(schema.contexts).where(eq(schema.contexts.name, "Work"));
+    // The suggestion is the person's; their direct chat shares it.
+    const [person] = await testDb.database.db.select().from(schema.people).where(eq(schema.people.id, chat!.personId!));
+    expect(person).toMatchObject({ defaultContextId: work!.id, contextConfirmed: false });
     expect(chat).toMatchObject({ defaultContextId: work!.id, contextConfirmed: false });
     const facts = await testDb.database.db.select().from(schema.personFacts).where(eq(schema.personFacts.personId, chat!.personId!));
     expect(facts).toEqual([expect.objectContaining({ key: "relationship", selfClaimed: true, verified: false, source: "ai" })]);

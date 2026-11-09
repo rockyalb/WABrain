@@ -38,6 +38,10 @@ async function makePerson(name: string) {
 async function makeChat(options: { name?: string; isGroup?: boolean; mode?: "on" | "off" | "mentions_only"; personId?: string | null; contextId?: string | null } = {}) {
   const id = newId();
   seq += 1;
+  // A direct chat's context is its person's.
+  if (!options.isGroup && options.personId && options.contextId) {
+    await testDb.database.db.update(people).set({ defaultContextId: options.contextId }).where(eq(people.id, options.personId));
+  }
   await testDb.database.db.insert(chats).values({
     id,
     jid: `chat-${seq}@${options.isGroup ? "g.us" : "s.whatsapp.net"}`,

@@ -33,6 +33,14 @@ export interface OpenTaskInput {
   dueHasTime: boolean;
 }
 
+/** A task or pending create of another chat that is linked to this chat. */
+export interface LinkedTaskInput extends OpenTaskInput {
+  /** The chat the task came from, e.g. "Casey". */
+  fromChat: string | null;
+  /** True for a create still waiting in Review (id = review item id). */
+  pending: boolean;
+}
+
 export interface WorkingMemoryLimits {
   /** Preceding messages kept before the burst (most recent first). Default 30. */
   maxPreceding?: number;
@@ -44,6 +52,8 @@ export interface WorkingMemoryLimits {
   maxOpenTasks?: number;
   /** Pending (not yet reviewed) creates listed. Default 20. */
   maxPendingTasks?: number;
+  /** Tasks of other chats linked to this one. Default 10. */
+  maxLinkedTasks?: number;
 }
 
 export interface WorkingMemoryInput {
@@ -67,6 +77,11 @@ export interface WorkingMemoryInput {
    * model neither proposes them again nor misses a later message saying they were already handled.
    */
   pendingTasks?: readonly OpenTaskInput[];
+  /**
+   * Tasks (and pending creates) from other chats that involve this chat ("send Jordan the list", asked in
+   * Casey's chat, in Jordan's chat). This chat may only complete or cancel them.
+   */
+  linkedTasks?: readonly LinkedTaskInput[];
   limits?: WorkingMemoryLimits;
 }
 
@@ -93,6 +108,11 @@ export interface MemoryTask {
   due: string | null;
 }
 
+export interface MemoryLinkedTask extends MemoryTask {
+  fromChat: string | null;
+  pending: boolean;
+}
+
 export interface WorkingMemory {
   now: {
     instant: string;
@@ -117,6 +137,8 @@ export interface WorkingMemory {
   openTasks: MemoryTask[];
   /** Suggested tasks the owner has not reviewed yet (ids are review item ids). */
   pendingTasks: MemoryTask[];
+  /** Tasks of other chats that involve this chat: complete or cancel only. */
+  linkedTasks: MemoryLinkedTask[];
   messages: MemoryMessage[];
   /** Quoted messages outside the window, for reference only. */
   quotedMessages: MemoryMessage[];
@@ -128,6 +150,7 @@ const DEFAULT_LIMITS: Required<WorkingMemoryLimits> = {
   maxDerivedChars: 2500,
   maxOpenTasks: 50,
   maxPendingTasks: 20,
+  maxLinkedTasks: 10,
 };
 
 export function toDate(at: Date | string | number): Date {
@@ -235,6 +258,9 @@ export function buildWorkingMemory(input: WorkingMemoryInput): WorkingMemory {
       : null,
     openTasks: input.openTasks.slice(0, limits.maxOpenTasks).map((task) => toMemoryTask(task, tz)),
     pendingTasks: (input.pendingTasks ?? []).slice(0, limits.maxPendingTasks).map((task) => toMemoryTask(task, tz)),
+    linkedTasks: (input.linkedTasks ?? [])
+      .slice(0, limits.maxLinkedTasks)
+      .map((task) => ({ ...toMemoryTask(task, tz), fromChat: task.fromChat, pending: task.pending })),
     messages: [
       ...preceding.map((message) => toMemoryMessage(message, false, input, limits)),
       ...burst.map((message) => toMemoryMessage(message, true, input, limits)),
@@ -250,6 +276,7 @@ export function citableIds(memory: WorkingMemory) {
     burst: new Set(memory.messages.filter((message) => message.isNew).map((message) => message.id)),
     openTasks: new Set(memory.openTasks.map((task) => task.id)),
     pendingTasks: new Set(memory.pendingTasks.map((task) => task.id)),
+    linkedTasks: new Set(memory.linkedTasks.map((task) => task.id)),
     contexts: new Set(memory.contexts.map((context) => context.id)),
   };
 }

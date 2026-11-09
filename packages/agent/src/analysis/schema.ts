@@ -19,7 +19,7 @@ export const ModelTaskActionSchema = z.object({
   description: z.string().nullable().describe("create only: one sentence with who/what"),
   language: z.string().nullable().describe('create only: language of the title, e.g. "en" or "es"'),
   due: ModelDueSchema.describe("create: due or null when none stated; reschedule: the new due"),
-  taskId: z.string().nullable().describe("complete/cancel/reschedule: id of an open or pending task from the lists"),
+  taskId: z.string().nullable().describe("complete/cancel/reschedule: id of an open or pending task from the lists; complete/cancel: also a linked task id"),
   taskIds: z.array(z.string()).nullable().describe("merge only: open task ids, the one to keep first"),
   contextId: z.string().nullable().describe("create only: a listed context id to override the chat default, else null"),
   contextReason: z.string().nullable().describe("why the context override applies, else null"),
@@ -30,6 +30,12 @@ export const ModelTaskActionSchema = z.object({
     })
     .nullable()
     .describe("create only: the new messages already show this task done or no longer needed, else null"),
+  involves: z
+    .array(z.string())
+    .nullable()
+    .describe(
+      "create only: names of other people or groups the owner must contact or deliver to, or is waiting on, exactly as written (\"Jordan\", \"Design group\"); never this chat's own contact; else null",
+    ),
   confidence: z.number().describe("0 to 1"),
   ambiguityReasons: z.array(z.string()),
   evidenceMessageIds: z.array(z.string()).describe("ids of the messages that justify this action"),

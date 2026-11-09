@@ -114,6 +114,19 @@ describe("tasks", () => {
     expect(all.items.map((task) => task.id)).not.toContain(stillOpen.id);
     expect(all.items.every((task) => task.status === "done" || task.status === "cancelled")).toBe(true);
   });
+
+  it("accepts explicit sorting for browser and device clients and rejects mismatched cursors", async () => {
+    const page = await get<{ items: Task[]; nextCursor: string }>("/v1/tasks?sort=due_asc&limit=1");
+    expect(page.items).toHaveLength(1);
+    expect(page.nextCursor).toBeTruthy();
+    expect((await send("GET", `/v1/tasks?sort=due_desc&cursor=${page.nextCursor}`)).status).toBe(400);
+    expect((await send("GET", "/v1/tasks?sort=unknown")).status).toBe(400);
+    const browser = await h.request("/web/tasks?sort=created_asc&limit=200", { headers: { cookie } });
+    expect(browser.status).toBe(200);
+    const body = await browser.json() as { items: Task[] };
+    const dates = body.items.map((task) => Date.parse(task.createdAt));
+    expect(dates).toEqual([...dates].sort((a, b) => a - b));
+  });
 });
 
 describe("idempotency", () => {
@@ -206,7 +219,7 @@ describe("contexts, settings, people, push", () => {
     expect((await get<{ task: Task }>(`/v1/tasks/${task.id}`)).task.contextId).toBe(work.id);
   });
 
-  it("validates and updates settings; policy is setup-only", async () => {
+  it("validates and updates settings; the trial is setup-only, the threshold is not", async () => {
     expect((await send("PATCH", "/v1/settings", { timezone: "Mars/Olympus" })).status).toBe(400);
     expect((await send("PATCH", "/v1/settings", { endOfWorkDay: "25:00" })).status).toBe(400);
     const updated = await send("PATCH", "/v1/settings", { endOfWorkDay: "18:30", dailySummaryTime: null });
@@ -214,11 +227,12 @@ describe("contexts, settings, people, push", () => {
     const policy = await h.request("/setup/policy", { method: "PATCH", headers: { cookie }, json: { autoCreateThreshold: 0.9, trialDays: 0 } });
     expect(await policy.json()).toMatchObject({ autoCreateThreshold: 0.9, trialDays: 0 });
     expect((await send("PATCH", "/setup/policy", { trialDays: 3 })).status).toBe(401);
-    // The trial is over, but nothing was calibrated: the app can tell the owner why creates still wait.
-    expect(await get("/v1/settings")).toMatchObject({
-      autoCreateThreshold: 0.9,
-      autoCreate: { state: "calibrating", profile: null, calibration: { ready: false, reason: "insufficient_labels", decisions: 0 }, required: { decisions: 20 } },
-    });
+    // A device cannot change the trial: the field is ignored.
+    expect(await (await send("PATCH", "/v1/settings", { trialDays: 3 })).json()).toMatchObject({ trialDays: 0 });
+    // The phone's slider sets the automatic-change threshold.
+    expect((await send("PATCH", "/v1/settings", { autoCreateThreshold: 1.2 })).status).toBe(400);
+    expect(await (await send("PATCH", "/v1/settings", { autoCreateThreshold: 0.75 })).json()).toMatchObject({ autoCreateThreshold: 0.75, trialDays: 0 });
+    expect(await get("/v1/settings")).toMatchObject({ autoCreateThreshold: 0.75 });
   });
 
   it("enforces the push endpoint SSRF policy", async () => {

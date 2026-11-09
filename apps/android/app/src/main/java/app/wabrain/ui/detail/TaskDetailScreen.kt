@@ -43,6 +43,7 @@ import app.wabrain.data.api.MessageViewDto
 import app.wabrain.data.api.TaskEventDto
 import app.wabrain.data.api.TaskKind
 import app.wabrain.data.db.TaskEntity
+import app.wabrain.data.db.links
 import app.wabrain.data.repo.DueInput
 import app.wabrain.data.repo.TaskEdit
 import app.wabrain.domain.DueFormatter
@@ -51,6 +52,7 @@ import app.wabrain.ui.common.Dropdown
 import app.wabrain.ui.common.EmptyState
 import app.wabrain.ui.common.ErrorBanner
 import app.wabrain.ui.common.KindSelector
+import app.wabrain.ui.common.LinkEditor
 import app.wabrain.ui.common.LoadingBox
 import app.wabrain.ui.common.SectionHeader
 import app.wabrain.ui.common.contextOptions
@@ -93,6 +95,7 @@ fun TaskDetailScreen(
                 actionError?.let { ErrorBanner(errorText(it), Modifier.clickable { vm.dismissError() }) }
                 TaskEditor(task, state, vm)
                 StatusButtons(task, vm)
+                LinksSection(task, state, vm)
 
                 SectionHeader(stringResource(R.string.task_evidence))
                 when {
@@ -174,6 +177,21 @@ private fun TaskEditor(task: TaskEntity, state: TaskDetailState, vm: TaskDetailV
             },
         ) { Text(stringResource(R.string.action_save)) }
     }
+}
+
+/** "Also closed from": the other contacts whose chats may close this task, saved as soon as they change. */
+@Composable
+private fun LinksSection(task: TaskEntity, state: TaskDetailState, vm: TaskDetailViewModel) {
+    SectionHeader(stringResource(R.string.task_links_title))
+    if (task.links.isEmpty()) {
+        Text(
+            stringResource(R.string.task_links_hint),
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            modifier = Modifier.padding(horizontal = 16.dp),
+        )
+    }
+    LinkEditor(task.links, task.chatId, state.chats, state.people, onChange = vm::updateLinks, modifier = Modifier.padding(horizontal = 16.dp))
 }
 
 @Composable

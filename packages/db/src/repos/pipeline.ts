@@ -386,13 +386,16 @@ export async function applyProposedFacts(db: Db, personId: string, facts: readon
   return changed;
 }
 
-/** Sets a suggested default context on a chat that has none (the owner confirms it later). */
-export async function suggestChatDefaultContext(db: Db, chatId: string, contextId: string): Promise<boolean> {
+/**
+ * Sets a suggested default context on a person who has none (the owner confirms it later). A trigger
+ * copies it onto the person's direct chats.
+ */
+export async function suggestPersonDefaultContext(db: Db, personId: string, contextId: string): Promise<boolean> {
   const rows = await db
-    .update(chats)
+    .update(people)
     .set({ defaultContextId: contextId, contextConfirmed: false, updatedAt: sql`now()` })
-    .where(and(eq(chats.id, chatId), isNull(chats.defaultContextId)))
-    .returning({ id: chats.id });
+    .where(and(eq(people.id, personId), isNull(people.defaultContextId)))
+    .returning({ id: people.id });
   return rows.length > 0;
 }
 

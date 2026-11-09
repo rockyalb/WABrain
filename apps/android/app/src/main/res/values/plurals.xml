@@ -32,4 +32,8 @@
         <item quantity="one">%1$d open</item>
         <item quantity="other">%1$d open</item>
     </plurals>
+    <plurals name="combo_keep_typing">
+        <item quantity="one">Keep typing to narrow %1$d match</item>
+        <item quantity="other">Keep typing to narrow %1$d matches</item>
+    </plurals>
 </resources>

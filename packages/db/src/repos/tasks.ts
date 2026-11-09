@@ -1,19 +1,20 @@
-import type { MessageView, ReviewItem, Task, TaskEvent, TaskKind, TaskStatus } from "@wabrain/contracts";
+import type { MessageView, ReviewItem, Task, TaskEvent, TaskKind, TaskSort, TaskStatus } from "@wabrain/contracts";
 import { and, asc, desc, eq, ne, sql, type SQL } from "drizzle-orm";
 import type { Db } from "../client.js";
-import { notFound } from "../errors.js";
+import { invalid, notFound } from "../errors.js";
 import { toReviewItem, toTask, toTaskEvent, type ReviewItemRow, type TaskRow } from "../mappers.js";
 import { clampLimit, decodeCursor, toPage, type Page, type PageRequest } from "../pagination.js";
 import { reviewItems, taskEvents, tasks } from "../schema.js";
 import { getMessageViews } from "./messages.js";
 
 export interface TaskFilter extends PageRequest {
-  /** "closed" is done or cancelled, newest closed first. */
+  /** "closed" is done or cancelled, newest closed first unless a sort is selected. */
   status?: TaskStatus | "closed" | null;
   kind?: TaskKind | null;
   contextId?: string | null;
   chatId?: string | null;
   personId?: string | null;
+  sort?: TaskSort;
 }
 
 export async function listTasks(db: Db, filter: TaskFilter = {}): Promise<Page<Task>> {
@@ -21,6 +22,12 @@ export async function listTasks(db: Db, filter: TaskFilter = {}): Promise<Page<T
   const closed = filter.status === "closed";
   // Closed tasks page by when they closed; a task closed without a time falls back to its last update.
   const closedAt = sql`coalesce(${tasks.closedAt}, ${tasks.updatedAt})`;
+  const sort = filter.sort ?? "default";
+  const explicit = sort !== "default";
+  const due = sort.startsWith("due_");
+  const ascending = sort.endsWith("_asc");
+  const field = due ? "dueAt" : sort.startsWith("updated_") ? "updatedAt" : "createdAt";
+  const sortColumn = explicit ? tasks[field] : closed ? closedAt : tasks.createdAt;
   const where: SQL[] = [];
   if (filter.status === "closed") where.push(ne(tasks.status, "open"));
   else if (filter.status) where.push(eq(tasks.status, filter.status));
@@ -29,16 +36,29 @@ export async function listTasks(db: Db, filter: TaskFilter = {}): Promise<Page<T
   if (filter.chatId) where.push(eq(tasks.chatId, filter.chatId));
   if (filter.personId) where.push(eq(tasks.personId, filter.personId));
   if (filter.cursor) {
-    const [at, id] = decodeCursor(filter.cursor, 2);
-    where.push(sql`(${closed ? closedAt : tasks.createdAt}, ${tasks.id}) < (${String(at)}::timestamptz, ${String(id)})`);
+    const parts = decodeCursor(filter.cursor, explicit ? 3 : 2);
+    const [at, id] = explicit ? parts.slice(1) : parts;
+    if ((explicit && parts[0] !== sort) || typeof id !== "string" ||
+      (at === null ? !due : typeof at !== "string" || !Number.isFinite(Date.parse(at)))) throw invalid("Invalid cursor");
+    if (at === null) {
+      where.push(sql`${sortColumn} is null and ${tasks.id} < ${id}`);
+    } else {
+      const comparison = ascending ? sql`${sortColumn} > ${at}::timestamptz` : sql`${sortColumn} < ${at}::timestamptz`;
+      const following = sql`(${comparison} or (${sortColumn} = ${at}::timestamptz and ${tasks.id} < ${id}))`;
+      where.push(due ? sql`(${following} or ${sortColumn} is null)` : following);
+    }
   }
   const rows = await db
     .select()
     .from(tasks)
     .where(and(...where))
-    .orderBy(...(closed ? [desc(closedAt), desc(tasks.id)] : [desc(tasks.createdAt), desc(tasks.id)]))
+    .orderBy(ascending ? sql`${sortColumn} asc nulls last` : sql`${sortColumn} desc nulls last`, desc(tasks.id))
     .limit(limit + 1);
-  return toPage(rows, limit, toTask, (row) => [(closed ? row.closedAt ?? row.updatedAt : row.createdAt).toISOString(), row.id]);
+  return toPage(rows, limit, toTask, (row) => {
+    const at = explicit ? row[field] : closed ? row.closedAt ?? row.updatedAt : row.createdAt;
+    const key = [at?.toISOString() ?? null, row.id];
+    return explicit ? [sort, ...key] : key;
+  });
 }
 
 export async function findTaskRow(db: Db, id: string, lock = false): Promise<TaskRow | null> {

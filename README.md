@@ -28,9 +28,10 @@ a native Android app, a home-screen widget, and an installable web app.
 - **Tasks from chats.** "Can you send me the contract tomorrow?" becomes a to-do
   due tomorrow. "Sent ✅" closes it. Your own promises ("I'll call him on
   Friday") and things you are waiting on from others are tracked too.
-- **Review first.** New tasks go to a Review queue until the model is calibrated
-  on your own approvals and rejections; after that, confident ones are created
-  automatically.
+- **Confident tasks are created, the rest wait in Review.** Proposals at or
+  above a confidence threshold you set (80% by default) become tasks right away;
+  you accept or reject the others. A request the chat already shows handled is
+  saved straight to Done.
 - **Any language.** Titles stay in the language of the chat. Mixed-language
   chats, slang, typos, and missing accents are handled.
 - **Voice notes, images, PDFs.** Voice notes are transcribed, images are

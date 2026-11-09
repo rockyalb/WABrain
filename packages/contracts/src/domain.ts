@@ -8,6 +8,10 @@ import { z } from "zod";
 const Id = z.string().min(1);
 const IsoDateTime = z.iso.datetime({ offset: true });
 
+/** Explicit task ordering; default retains each list's existing order. Undated tasks sort last. */
+export const TaskSortSchema = z.enum(["default", "due_asc", "due_desc", "created_desc", "created_asc", "updated_desc", "updated_asc"]);
+export type TaskSort = z.infer<typeof TaskSortSchema>;
+
 // ---------------------------------------------------------------------------
 // Contexts and settings
 // ---------------------------------------------------------------------------
@@ -33,51 +37,15 @@ export const SettingsSchema = z.object({
   remindersEnabled: z.boolean(),
   /** Minutes before dueAt to send a reminder. */
   reminderLeadMinutes: z.number().int().min(0).max(10080),
-  /** When the trial period started; during the trial every create goes to Review. */
+  /** When the trial period started; during the trial every create goes to Review. New installs have none (0 days). */
   trialStartedAt: IsoDateTime,
   trialDays: z.number().int().min(0).max(90),
   /**
    * The automatic-change threshold: the minimum model confidence for any change the AI applies without
-   * Review. It gates creates (after the trial, and never below the calibrated threshold for the active
-   * model/prompt profile) and also completions, cancellations and reschedules backed by the owner's own
-   * messages. The field keeps its historical name.
+   * Review. It gates creates (after the trial) and also completions, cancellations and reschedules
+   * backed by the owner's own messages. The field keeps its historical name.
    */
   autoCreateThreshold: z.number().min(0).max(1),
-});
-
-/**
- * Why creates are or are not applied automatically right now (docs/SPEC.md, "Trial period").
- * trial: every create goes to Review. calibrating: the trial is over, but the analysis profile in use
- * (provider, model and prompt version of the latest analysis) does not yet have enough owner Review
- * decisions for a usable threshold, so creates still go to Review. active: creates at or above
- * effectiveThreshold are applied, unless the chat has auto-create off or the model flags ambiguity.
- * Completions, cancellations and reschedules are not gated by the trial or calibration.
- */
-export const AutoCreateStatusSchema = z.object({
-  state: z.enum(["trial", "calibrating", "active"]),
-  /** Null before the first successful analysis. */
-  profile: z.object({ provider: z.string(), model: z.string(), promptVersion: z.string() }).nullable(),
-  calibration: z.object({
-    ready: z.boolean(),
-    reason: z.enum(["insufficient_labels", "no_reliable_threshold"]).nullable(),
-    /** Calibrated floor for this profile; null until ready. */
-    threshold: z.number().min(0).max(1).nullable(),
-    /** max(calibrated floor, autoCreateThreshold); per-chat overrides can only raise it. Null until ready. */
-    effectiveThreshold: z.number().min(0).max(1).nullable(),
-    /** Unambiguous create proposals of this profile that the owner accepted or rejected. */
-    decisions: z.number().int().min(0),
-    accepted: z.number().int().min(0),
-    rejected: z.number().int().min(0),
-    calibratedAt: IsoDateTime.nullable(),
-  }),
-  required: z.object({
-    decisions: z.number().int(),
-    accepted: z.number().int(),
-    rejected: z.number().int(),
-    uneditedAcceptedAtThreshold: z.number().int(),
-    /** Minimum share of decisions at or above the threshold that were accepted. */
-    precision: z.number().min(0).max(1),
-  }),
 });
 
 // ---------------------------------------------------------------------------
@@ -99,6 +67,10 @@ export const ChatSchema = z.object({
   name: z.string().nullable(),
   isGroup: z.boolean(),
   mode: ChatModeSchema,
+  /**
+   * The chat's context. A direct chat's context belongs to its person: this is a read-only copy of
+   * Person.defaultContextId, and setting it on a direct chat sets the person's.
+   */
   defaultContextId: Id.nullable(),
   /** False while the default context is only a suggestion awaiting owner confirmation. */
   contextConfirmed: z.boolean(),
@@ -146,7 +118,10 @@ export const PersonSchema = z.object({
   jids: z.array(z.string()),
   /** Usual languages, most frequent first, e.g. ["en", "es"]. */
   languages: z.array(z.string()),
+  /** Context of everything with this person; their direct chats share it. */
   defaultContextId: Id.nullable(),
+  /** False while the default context is only a suggestion awaiting owner confirmation. */
+  contextConfirmed: z.boolean().default(true),
   facts: z.array(PersonFactSchema),
   updatedAt: IsoDateTime,
 });
@@ -159,6 +134,21 @@ export const PersonSchema = z.object({
 export const TaskKindSchema = z.enum(["todo", "waiting_on"]);
 export const TaskStatusSchema = z.enum(["open", "done", "cancelled"]);
 export const TaskOriginSchema = z.enum(["ai", "manual", "import"]);
+
+/**
+ * Another chat a task involves ("Send Jordan the list" → Jordan's chat), so that chat can close it.
+ * chatId set: a confirmed link; that chat's analysis may complete or cancel the task. chatId null: the
+ * name could not be matched to exactly one chat, and the owner picks one (from candidates, or any chat).
+ * A person's name links only their direct chat; a group is linked only when it is named or picked.
+ */
+export const TaskLinkSchema = z.object({
+  /** The name as written in the request ("Jordan"), or the chat's name for a link the owner added. */
+  name: z.string().min(1).max(80),
+  chatId: Id.nullable(),
+  /** Unconfirmed links only: the chats the name may mean, best first (may be empty). */
+  candidates: z.array(z.object({ chatId: Id, name: z.string() })).max(5).default([]),
+  source: z.enum(["ai", "owner"]),
+});
 
 export const TaskSchema = z.object({
   id: Id,
@@ -173,6 +163,8 @@ export const TaskSchema = z.object({
   contextId: Id.nullable(),
   chatId: Id.nullable(),
   personId: Id.nullable(),
+  /** Other chats this task involves; a confirmed link lets that chat close it (TaskLink). */
+  links: z.array(TaskLinkSchema).default([]),
   origin: TaskOriginSchema,
   /** Language the title is written in, e.g. "en". */
   language: z.string().nullable(),
@@ -181,6 +173,10 @@ export const TaskSchema = z.object({
   createdAt: IsoDateTime,
   updatedAt: IsoDateTime,
   closedAt: IsoDateTime.nullable(),
+  /** Who performed the current closure; independent of who created the task. */
+  closedBy: z.enum(["ai", "owner", "system"]).nullable().optional(),
+  /** Who created the task: "ai" when it was applied on its own, "owner" when added or accepted in Review. */
+  createdBy: z.enum(["ai", "owner", "system"]).nullable().optional(),
 });
 
 export const TaskEventTypeSchema = z.enum([
@@ -242,6 +238,8 @@ export const CreateTaskActionSchema = z.object({
   contextId: Id.nullable(),
   language: z.string().nullable(),
   alreadyHandled: CreateAlreadyHandledSchema.optional(),
+  /** Other chats the task involves, resolved by code from the names the model reported. */
+  links: z.array(TaskLinkSchema).max(5).optional(),
   ...ActionBase,
 });
 
@@ -272,12 +270,25 @@ export const MergeTasksActionSchema = z.object({
   ...ActionBase,
 });
 
+/**
+ * Not produced by the model: the owner's confirmation of the chats an automatically created task was
+ * linked to (Review type "link"). The links are already active; accepting keeps them (or the owner's
+ * edited list), rejecting removes these links from the task.
+ */
+export const LinkTaskActionSchema = z.object({
+  type: z.literal("link"),
+  taskId: Id,
+  links: z.array(TaskLinkSchema).min(1).max(5),
+  ...ActionBase,
+});
+
 export const TaskActionSchema = z.discriminatedUnion("type", [
   CreateTaskActionSchema,
   CompleteTaskActionSchema,
   CancelTaskActionSchema,
   RescheduleTaskActionSchema,
   MergeTasksActionSchema,
+  LinkTaskActionSchema,
 ]);
 
 /**
@@ -290,6 +301,7 @@ export const PolicyDecisionSchema = z.object({
   reason: z.enum([
     "auto_create",
     "trial_period",
+    /** No longer produced: creates needed a calibrated threshold before Review decisions stopped gating them. */
     "calibration_required",
     "auto_create_disabled",
     "below_threshold",
@@ -304,6 +316,8 @@ export const PolicyDecisionSchema = z.object({
     "conflicting_actions",
     "pending_create",
     "already_handled",
+    "linked_only",
+    "link_confirmation",
   ]),
 });
 
@@ -317,6 +331,8 @@ export const ReviewItemTypeSchema = z.enum([
   "possibly_cancelled",
   "reschedule",
   "merge",
+  /** Confirm the chats an automatically created task was linked to (LinkTaskAction). */
+  "link",
 ]);
 
 /**
@@ -403,7 +419,6 @@ export const AskResponseSchema = z.object({
 
 export type Context = z.infer<typeof ContextSchema>;
 export type Settings = z.infer<typeof SettingsSchema>;
-export type AutoCreateStatus = z.infer<typeof AutoCreateStatusSchema>;
 export type ChatMode = z.infer<typeof ChatModeSchema>;
 export type Chat = z.infer<typeof ChatSchema>;
 export type PersonFactKey = z.infer<typeof PersonFactKeySchema>;
@@ -412,9 +427,11 @@ export type Person = z.infer<typeof PersonSchema>;
 export type TaskKind = z.infer<typeof TaskKindSchema>;
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 export type Task = z.infer<typeof TaskSchema>;
+export type TaskLink = z.infer<typeof TaskLinkSchema>;
 export type TaskEvent = z.infer<typeof TaskEventSchema>;
 export type TaskAction = z.infer<typeof TaskActionSchema>;
 export type CreateTaskAction = z.infer<typeof CreateTaskActionSchema>;
+export type LinkTaskAction = z.infer<typeof LinkTaskActionSchema>;
 export type PolicyDecision = z.infer<typeof PolicyDecisionSchema>;
 export type ReviewItemType = z.infer<typeof ReviewItemTypeSchema>;
 export type ReviewItem = z.infer<typeof ReviewItemSchema>;
@@ -438,6 +455,18 @@ export const NotificationPayloadSchema = z.discriminatedUnion("type", [
     reviewItemId: Id,
     reviewType: ReviewItemTypeSchema,
     title: z.string(),
+    /** link only: a name still needs a contact picked, so the notification offers no Accept. */
+    needsPick: z.boolean().optional(),
+    /** create only: a later message shows it already handled; offer "Save as done" and Discard. */
+    handled: z.enum(["done", "cancelled"]).optional(),
+  }),
+  /** A create applied straight into Done or Cancelled because its own messages showed it handled. */
+  z.object({
+    type: z.literal("handled"),
+    notificationId: Id,
+    taskId: Id,
+    title: z.string(),
+    status: z.enum(["done", "cancelled"]),
   }),
   z.object({ type: z.literal("reminder"), notificationId: Id, taskId: Id, title: z.string(), dueAt: IsoDateTime }),
   z.object({

@@ -1,42 +1,7 @@
 import { useEffect, useState } from "preact/hooks";
-import type { AutoCreateStatus } from "../api";
 import { Button, Card, Field, LoadError, Notice, PageHeader, Spinner, formatDate, useAction, useApi, useLoad } from "../components/ui";
 
-const DEFAULT_THRESHOLD = 0.85;
-
-const percent = (value: number) => `${Math.round(value * 100)}%`;
-
-/** Why new tasks are, or are not yet, created without Review. */
-function AutoCreateSummary({ status }: { status: AutoCreateStatus | undefined }) {
-  if (!status) return null;
-  const { calibration, required, profile } = status;
-  const model = profile ? ` (${profile.model}, prompt ${profile.promptVersion})` : "";
-  if (status.state === "active" && calibration.effectiveThreshold !== null) {
-    return (
-      <p class="muted">
-        Creating tasks automatically at {percent(calibration.effectiveThreshold)} confidence or more{model}, calibrated from {calibration.decisions} of your
-        Review decisions.
-      </p>
-    );
-  }
-  if (status.state === "trial") {
-    return (
-      <p class="muted">
-        Every new task waits in Review during the trial. Decisions so far for the current model: {calibration.decisions} of {required.decisions} needed.
-      </p>
-    );
-  }
-  const why =
-    calibration.reason === "no_reliable_threshold"
-      ? `no confidence level yet where at least ${percent(required.precision)} of proposals were accepted with ${required.uneditedAcceptedAtThreshold} accepted unedited`
-      : `${calibration.decisions} of ${required.decisions} decisions so far, with at least ${required.accepted} accepted and ${required.rejected} rejected needed (now ${calibration.accepted} and ${calibration.rejected})`;
-  return (
-    <p class="muted">
-      The trial is over, but new tasks still wait in Review until your decisions calibrate the current model{model}: {why}. Changing the model or prompt
-      starts a new calibration.
-    </p>
-  );
-}
+const DEFAULT_THRESHOLD = 0.8;
 
 export function Policy() {
   const api = useApi();
@@ -65,7 +30,7 @@ export function Policy() {
   return (
     <>
       <PageHeader kicker="Policy" title="When tasks are created automatically">
-        During the trial every proposed task waits in Review. Your approvals and rejections become the evaluation set used to tune the threshold below.
+        Proposed tasks are created on their own when the model is confident enough. Anything less certain waits in Review.
       </PageHeader>
       {status.loading && !status.data ? <Spinner /> : null}
       {status.error ? <LoadError error={status.error} onRetry={status.reload} /> : null}
@@ -83,7 +48,7 @@ export function Policy() {
                 {formatDate(trial.endsAt)}.
               </p>
             ) : null}
-            <Field id="trial-days" label="Trial length in days" hint="0 ends the trial now. The start date does not change.">
+            <Field id="trial-days" label="Trial length in days" hint="During the trial every new task waits in Review. 0 ends the trial now. The start date does not change.">
               <input
                 id="trial-days"
                 type="number"
@@ -100,11 +65,10 @@ export function Policy() {
             </Field>
           </Card>
           <Card title="Automatic-change threshold">
-            <AutoCreateSummary status={status.data.autoCreate} />
             <Field
               id="threshold"
               label={`Change tasks automatically at ${Math.round(threshold * 100)}% confidence or more`}
-              hint="Below the threshold, or when the model flags any ambiguity, a proposal goes to Review. The same minimum applies when your own message closes, cancels, or reschedules a task. New tasks also need the calibrated threshold from your Review decisions, whichever is higher."
+              hint="Below the threshold, or when the model flags any ambiguity, a proposal goes to Review. The same minimum applies when your own message closes, cancels, or reschedules a task. A task the chat shows already done is saved straight to Done."
             >
               <input
                 id="threshold"

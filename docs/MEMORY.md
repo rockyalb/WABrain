@@ -21,9 +21,9 @@ as memory.
   screen, and every change is audited.
 - Claims about identity or role made by the person themselves ("I'm the CFO")
   stay unverified until corroborated or confirmed by the owner.
-- Each chat has a default context (Work, Personal, or a custom one). It is
-  suggested from the profile and confirmed by the owner. Tasks can override it
-  individually.
+- Each person has a default context (Work, Personal, or a custom one), shared
+  by their direct chat. It is suggested from the profile and confirmed by the
+  owner. Group chats have their own. Tasks can override it individually.
 
 ## 3. Long-term recall (phase 2 and 3)
 

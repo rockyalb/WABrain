@@ -52,8 +52,9 @@ describe("owner and device authentication", () => {
     expect(status.status).toBe(200);
     expect(await status.json()).toMatchObject({
       database: { ok: true },
-      trial: { active: true, days: 7 },
-      autoCreate: { state: "trial", calibration: { ready: false } },
+      // New installs start without a trial, at 80%.
+      trial: { active: false, days: 0 },
+      policy: { trialDays: 0, autoCreateThreshold: 0.8 },
       devices: { count: 0 },
     });
     expect(await (await h.request("/setup/session", { headers: { cookie } })).json()).toMatchObject({

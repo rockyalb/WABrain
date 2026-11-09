@@ -11,6 +11,8 @@ export interface AnalyzeChatResult {
   actions: TaskAction[];
   /** Parallel to actions: why the model overrode the chat's default context, or null. */
   contextReasons: Array<string | null>;
+  /** Parallel to actions: for creates, the other people or groups involved, as written (to resolve to links). */
+  involves: string[][];
   /** Model actions removed by validation, for the analysis_runs audit record. */
   dropped: DroppedAction[];
   run: ModelRun;
@@ -25,6 +27,7 @@ export async function analyzeChat(providers: Providers, memory: WorkingMemory, o
     return {
       actions: [],
       contextReasons: [],
+      involves: [],
       dropped: [],
       run: {
         provider: providers.text.provider,

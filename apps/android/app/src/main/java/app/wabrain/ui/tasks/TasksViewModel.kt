@@ -18,6 +18,7 @@ import app.wabrain.data.repo.DueInput
 import app.wabrain.data.repo.NewTask
 import app.wabrain.domain.Instants
 import app.wabrain.domain.TaskGrouping
+import app.wabrain.domain.TaskSort
 import app.wabrain.ui.common.TaskDraft
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CancellationException
@@ -30,6 +31,7 @@ import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import java.time.Instant
@@ -57,11 +59,24 @@ data class TasksUiState(
     val chats: List<ChatEntity> = emptyList(),
     val people: List<PersonEntity> = emptyList(),
     val filter: String? = null,
+    val sort: TaskSort = TaskSort.DEFAULT,
     val zone: ZoneId = Instants.zoneOrDefault(null),
     val endOfWorkDay: LocalTime = Instants.localTimeOrDefault(null),
     val now: Instant = Instant.now(),
     val completedToday: Int = 0,
     val createdToday: Int = 0,
+    /** Closed tab with a contact picked: all their closed tasks from the server, past the synced week. */
+    val closedSearch: ClosedSearch = ClosedSearch(),
+)
+
+/** Every closed task for one contact in the selected order, a page at a time. */
+data class ClosedSearch(
+    val personId: String? = null,
+    val tasks: List<TaskEntity> = emptyList(),
+    val nextCursor: String? = null,
+    val loading: Boolean = false,
+    val failed: Boolean = false,
+    val sort: TaskSort = TaskSort.DEFAULT,
 )
 
 data class DailyTaskActivity(val completedToday: Int, val createdToday: Int)
@@ -104,6 +119,7 @@ internal fun reviewTargetState(itemId: String, response: ReviewDecisionResponse)
 class TasksViewModel(private val container: AppContainer) : ViewModel() {
     private val db = container.db
     private val filter = MutableStateFlow<String?>(null)
+    private val sort = MutableStateFlow(TaskSort.DEFAULT)
 
     private val _refreshing = MutableStateFlow(false)
     val refreshing: StateFlow<Boolean> = _refreshing.asStateFlow()
@@ -114,6 +130,20 @@ class TasksViewModel(private val container: AppContainer) : ViewModel() {
     private val _reviewTarget = MutableStateFlow<ReviewTargetState>(ReviewTargetState.None)
     val reviewTarget: StateFlow<ReviewTargetState> = _reviewTarget.asStateFlow()
     private var reviewTargetJob: Job? = null
+
+    private val closedSearch = MutableStateFlow(ClosedSearch())
+    private var closedSearchJob: Job? = null
+
+    init {
+        viewModelScope.launch {
+            container.taskListPrefs.sort.collect { saved ->
+                if (sort.value != saved) {
+                    sort.value = saved
+                    reloadClosedSearch()
+                }
+            }
+        }
+    }
 
     /** Re-evaluates Today/overdue every minute. */
     private val ticker = flow {
@@ -127,7 +157,7 @@ class TasksViewModel(private val container: AppContainer) : ViewModel() {
         Lookups(c, ch, p, s?.dto?.timezone, s?.dto?.endOfWorkDay)
     }
 
-    val state: StateFlow<TasksUiState> = combine(db.tasks().observeAll(), db.reviews().observeAll(), lookups, filter, ticker) { tasks, reviews, l, f, now ->
+    private val synced = combine(db.tasks().observeAll(), db.reviews().observeAll(), lookups, filter, ticker) { tasks, reviews, l, f, now ->
         val zone = Instants.zoneOrDefault(l.timezone)
         val chatCtx = l.chats.associate { it.id to it.defaultContextId }
         val personCtx = l.people.associate { it.id to it.defaultContextId }
@@ -156,10 +186,28 @@ class TasksViewModel(private val container: AppContainer) : ViewModel() {
             completedToday = activity.completedToday,
             createdToday = activity.createdToday,
         )
+    }
+
+    val state: StateFlow<TasksUiState> = combine(synced, closedSearch, sort) { s, search, order ->
+        val chatCtx = s.chats.associate { it.id to it.defaultContextId }
+        val personCtx = s.people.associate { it.id to it.defaultContextId }
+        s.copy(
+            sort = order,
+            today = order.apply(s.today),
+            upcoming = order.apply(s.upcoming),
+            waiting = order.apply(s.waiting),
+            recentlyClosed = order.apply(s.recentlyClosed),
+            closedSearch = search.copy(tasks = if (search.sort == order) TaskGrouping.filterByContext(search.tasks, s.filter, chatCtx, personCtx) else emptyList()),
+        )
     }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), TasksUiState())
 
     fun setFilter(contextId: String?) {
         filter.value = contextId
+    }
+
+    fun setSort(order: TaskSort) {
+        // DataStore is the source of truth; its emission also reloads any paginated search.
+        viewModelScope.launch { container.taskListPrefs.setSort(order) }
     }
 
     fun refresh() {
@@ -168,11 +216,54 @@ class TasksViewModel(private val container: AppContainer) : ViewModel() {
             try {
                 container.outbox.flush()
                 container.sync.sync()
+                reloadClosedSearch()
                 _error.value = null
             } catch (e: Exception) {
                 _error.value = e
             } finally {
                 _refreshing.value = false
+            }
+        }
+    }
+
+    /** Picks the contact whose closed tasks the Closed tab lists; null goes back to the last 7 days. */
+    fun searchClosed(personId: String?) {
+        if (personId == closedSearch.value.personId) return
+        closedSearchJob?.cancel()
+        if (personId == null) closedSearch.value = ClosedSearch() else loadClosed(personId, null)
+    }
+
+    fun loadMoreClosed() {
+        val search = closedSearch.value
+        val personId = search.personId ?: return
+        val cursor = search.nextCursor ?: return
+        if (!search.loading) loadClosed(personId, cursor)
+    }
+
+    /** Fetches the first page again, e.g. after a task was reopened from its detail screen. */
+    fun reloadClosedSearch() {
+        closedSearch.value.personId?.let { loadClosed(it, null) }
+    }
+
+    private fun loadClosed(personId: String, cursor: String?) {
+        closedSearchJob?.cancel()
+        val order = sort.value
+        // A reload keeps the current list on screen until the new page arrives.
+        closedSearch.update { if (it.personId == personId && it.sort == order) it.copy(loading = true, failed = false) else ClosedSearch(personId, loading = true, sort = order) }
+        closedSearchJob = viewModelScope.launch {
+            try {
+                val page = container.api.listTasks("closed", cursor = cursor, personId = personId, limit = CLOSED_PAGE, sort = order.wireValue)
+                ensureActive()
+                val tasks = page.items.map { it.toEntity() }
+                closedSearch.update { search ->
+                    if (search.personId != personId || search.sort != order) return@update search
+                    val merged = if (cursor == null) tasks else search.tasks + tasks.filter { task -> search.tasks.none { it.id == task.id } }
+                    search.copy(tasks = merged, nextCursor = page.nextCursor, loading = false, failed = false)
+                }
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (_: Exception) {
+                closedSearch.update { if (it.personId == personId && it.sort == order) it.copy(loading = false, failed = true) else it }
             }
         }
     }
@@ -231,6 +322,10 @@ class TasksViewModel(private val container: AppContainer) : ViewModel() {
 
     fun decide(itemId: String, accept: Boolean, edits: JsonObject? = null, closeAs: String? = null) = viewModelScope.launch {
         container.tasks.decideReview(itemId, accept, edits, closeAs)
+    }
+
+    private companion object {
+        const val CLOSED_PAGE = 50
     }
 
     private data class Lookups(

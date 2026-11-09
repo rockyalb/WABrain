@@ -11,6 +11,7 @@ import app.wabrain.data.api.SettingsDto
 import app.wabrain.data.api.TaskActionDto
 import app.wabrain.data.api.TaskDto
 import app.wabrain.data.api.TaskKind
+import app.wabrain.data.api.TaskLinkDto
 import app.wabrain.data.api.TaskStatus
 import app.wabrain.data.api.WabJson
 import app.wabrain.data.api.parseTaskAction
@@ -20,6 +21,10 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.builtins.serializer
 
 private val stringList = ListSerializer(String.serializer())
+private val linkList = ListSerializer(TaskLinkDto.serializer())
+
+fun encodeLinks(values: List<TaskLinkDto>): String = WabJson.encodeToString(linkList, values)
+fun decodeLinks(json: String): List<TaskLinkDto> = runCatching { WabJson.decodeFromString(linkList, json) }.getOrDefault(emptyList())
 
 fun encodeStringList(values: List<String>): String = WabJson.encodeToString(stringList, values)
 fun decodeStringList(json: String): List<String> = runCatching { WabJson.decodeFromString(stringList, json) }.getOrDefault(emptyList())
@@ -42,8 +47,12 @@ fun TaskDto.toEntity(): TaskEntity = TaskEntity(
     createdAt = Instants.parseMillis(createdAt),
     updatedAt = Instants.parseMillis(updatedAt),
     closedAt = closedAt?.let(Instants::parseMillis),
+    linksJson = encodeLinks(links),
+    closedBy = closedBy,
+    createdBy = createdBy,
 )
 
+val TaskEntity.links: List<TaskLinkDto> get() = decodeLinks(linksJson)
 val TaskEntity.taskKind: TaskKind get() = TaskKind.fromWire(kind)
 val TaskEntity.taskStatus: TaskStatus get() = TaskStatus.fromWire(status)
 val TaskEntity.evidenceIds: List<String> get() = decodeStringList(evidenceMessageIds)

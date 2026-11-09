@@ -23,6 +23,18 @@ class PushPayloadTest {
     }
 
     @Test
+    fun decodesAContactConfirmationAndWhetherItNeedsAPick() {
+        assertEquals(
+            PushPayload.Review("r1", ReviewItemType.LINK, "Send Jordan the list → Jordan", from = "Casey"),
+            PushPayload.parse("""{"type":"review","reviewItemId":"r1","reviewType":"link","title":"Send Jordan the list → Jordan","from":"Casey"}"""),
+        )
+        assertEquals(
+            PushPayload.Review("r2", ReviewItemType.LINK, "Send Robin the offer → Robin?", needsPick = true),
+            PushPayload.parse("""{"type":"review","reviewItemId":"r2","reviewType":"link","title":"Send Robin the offer → Robin?","needsPick":true}"""),
+        )
+    }
+
+    @Test
     fun decodesTheDurableNotificationId() {
         val review = PushPayload.parse(
             """{"type":"review","notificationId":"n1","reviewItemId":"r1","reviewType":"create","title":"Contract"}""",
@@ -41,6 +53,25 @@ class PushPayloadTest {
         )
         assertEquals("n3", PushPayload.parse("""{"type":"summary","notificationId":"n3","open":1}""").notificationId)
         assertEquals(null, PushPayload.parse("""{"type":"sync"}""").notificationId)
+    }
+
+    @Test
+    fun decodesACreateShownAlreadyHandledAndASavedAsDoneTask() {
+        assertEquals(
+            PushPayload.Review("r1", ReviewItemType.CREATE, "Send the contract", "n5", handled = "done"),
+            PushPayload.parse(
+                """{"type":"review","notificationId":"n5","reviewItemId":"r1","reviewType":"create","title":"Send the contract","handled":"done"}""",
+            ),
+        )
+        assertEquals(
+            PushPayload.Review("r1", ReviewItemType.CREATE, "T"),
+            PushPayload.parse("""{"type":"review","reviewItemId":"r1","reviewType":"create","title":"T","handled":"maybe"}"""),
+        )
+        assertEquals(
+            PushPayload.Handled("t1", "Send the contract", "done", "n6", from = "Sam"),
+            PushPayload.parse("""{"type":"handled","notificationId":"n6","taskId":"t1","title":"Send the contract","status":"done","from":"Sam"}"""),
+        )
+        assertEquals(PushPayload.Unknown, PushPayload.parse("""{"type":"handled","taskId":"t1","title":"T","status":"open"}"""))
     }
 
     @Test

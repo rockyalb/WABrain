@@ -9,7 +9,7 @@ import app.wabrain.sync.WorkScheduler
 import kotlinx.coroutines.launch
 
 /**
- * Handles Accept / Reject (or Done / Not yet) on a review notification. The
+ * Handles Accept / Reject (or Done / Not yet, or Save as done / Discard) on a review notification. The
  * decision is written to Room and queued in the outbox, which WorkManager
  * sends even when the app is closed. Not exported: only our own
  * PendingIntents can reach it.
@@ -19,12 +19,13 @@ class ReviewActionReceiver : BroadcastReceiver() {
         if (intent.action != ACTION_DECIDE) return
         val itemId = intent.getStringExtra(EXTRA_REVIEW_ID) ?: return
         val accept = intent.getBooleanExtra(EXTRA_ACCEPT, false)
+        val closeAs = intent.getStringExtra(EXTRA_CLOSE_AS)
         val notificationId = intent.getIntExtra(EXTRA_NOTIFICATION_ID, 0)
         val pending = goAsync()
         val container = context.appContainer
         container.appScope.launch {
             try {
-                container.tasks.decideReview(itemId, accept)
+                container.tasks.decideReview(itemId, accept, closeAs = closeAs.takeIf { accept })
                 Notifier.cancelReview(context, notificationId)
             } catch (_: Exception) {
                 // Keep the notification available if the local write fails; a sync
@@ -41,13 +42,16 @@ class ReviewActionReceiver : BroadcastReceiver() {
         private const val EXTRA_REVIEW_ID = "reviewItemId"
         private const val EXTRA_ACCEPT = "accept"
         private const val EXTRA_NOTIFICATION_ID = "notificationId"
+        private const val EXTRA_CLOSE_AS = "closeAs"
 
-        fun pendingIntent(context: Context, reviewItemId: String, accept: Boolean, notificationId: Int): PendingIntent {
+        /** [closeAs] ("done" or "cancelled"): accepting saves the new task closed at once. */
+        fun pendingIntent(context: Context, reviewItemId: String, accept: Boolean, notificationId: Int, closeAs: String? = null): PendingIntent {
             val intent = Intent(context, ReviewActionReceiver::class.java).apply {
                 action = ACTION_DECIDE
                 putExtra(EXTRA_REVIEW_ID, reviewItemId)
                 putExtra(EXTRA_ACCEPT, accept)
                 putExtra(EXTRA_NOTIFICATION_ID, notificationId)
+                if (closeAs != null) putExtra(EXTRA_CLOSE_AS, closeAs)
             }
             val requestCode = notificationId * 2 + if (accept) 1 else 0
             return PendingIntent.getBroadcast(context, requestCode, intent, PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)

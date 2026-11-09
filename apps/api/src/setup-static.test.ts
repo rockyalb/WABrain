@@ -53,6 +53,8 @@ describe("setup static files in the full app", () => {
         const csp = (await h.request(path)).headers.get("content-security-policy");
         expect(csp, path).toContain("script-src 'self'");
         expect(csp, path).toContain("img-src 'self' data:");
+        expect(csp, path).toContain("font-src 'self'");
+        expect(csp, path).toContain("manifest-src 'self'");
       }
       expect((await h.request("/health")).headers.get("content-security-policy")).toBe("default-src 'none'; frame-ancestors 'none'");
     } finally {

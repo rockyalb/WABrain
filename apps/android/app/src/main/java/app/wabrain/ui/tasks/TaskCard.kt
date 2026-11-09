@@ -45,6 +45,8 @@ import androidx.compose.ui.text.TextLayoutResult
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.res.stringResource
+import app.wabrain.R
 import app.wabrain.domain.TaskSource
 import app.wabrain.ui.common.ContextDot
 import app.wabrain.ui.theme.GlassColors
@@ -59,7 +61,7 @@ import kotlin.math.min
 import kotlin.math.sin
 
 /** What a task card shows under its title. */
-data class TaskMeta(val dueText: String, val overdue: Boolean, val contextName: String?, val contextColor: String?)
+data class TaskMeta(val dueText: String, val overdue: Boolean, val contextName: String?, val contextColor: String?, val createdByAi: Boolean = false)
 
 /**
  * Mint Glass task card. Ticking the circle fills it with green, strikes the
@@ -134,7 +136,7 @@ fun GlassTaskCard(
 
 /** A closed task in Recently closed: the same card without a checkbox. */
 @Composable
-fun GlassClosedCard(title: String, source: TaskSource?, closedText: String, status: String, onOpen: () -> Unit, modifier: Modifier = Modifier) {
+fun GlassClosedCard(title: String, source: TaskSource?, closedText: String, status: String, onOpen: () -> Unit, modifier: Modifier = Modifier, closedByAi: Boolean = false) {
     val g = LocalGlass.current
     Row(
         modifier
@@ -148,26 +150,37 @@ fun GlassClosedCard(title: String, source: TaskSource?, closedText: String, stat
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
             if (source != null) SourceLine(source, g)
             Text(title, style = MaterialTheme.typography.bodyLarge, maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text(closedText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text(closedText, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (closedByAi) {
+                    Icon(WabIcons.Sparkle, contentDescription = stringResource(R.string.closed_by_ai), tint = g.accent, modifier = Modifier.size(15.dp))
+                }
+            }
         }
         Text(status, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
-/** "Family · Mira" with a group icon, or "Sam Carter" with a person icon. */
+/**
+ * "Family · Mira" with a group icon, or "Sam Carter" with a person icon, then the other chats the
+ * task involves: "→ Jordan", or "→ Robin?" while the owner still has to say who that is.
+ */
 @Composable
 fun SourceLine(source: TaskSource, g: GlassColors = LocalGlass.current) {
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-        Icon(if (source.groupName != null) WabIcons.Group else WabIcons.Person, contentDescription = null, tint = g.source, modifier = Modifier.size(15.dp))
-        Text(
-            text = source.groupName ?: source.personName.orEmpty(),
-            style = MaterialTheme.typography.labelMedium,
-            fontWeight = FontWeight.Bold,
-            color = g.source,
-            maxLines = 1,
-            overflow = TextOverflow.Ellipsis,
-            modifier = Modifier.weight(1f, fill = false),
-        )
+        val from = source.groupName ?: source.personName
+        if (from != null) {
+            Icon(if (source.groupName != null) WabIcons.Group else WabIcons.Person, contentDescription = null, tint = g.source, modifier = Modifier.size(15.dp))
+            Text(
+                text = from,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Bold,
+                color = g.source,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
         if (source.groupName != null && source.personName != null) {
             Text(
                 text = "· ${source.personName}",
@@ -177,18 +190,36 @@ fun SourceLine(source: TaskSource, g: GlassColors = LocalGlass.current) {
                 maxLines = 1,
             )
         }
+        source.linkLabel?.let { links ->
+            Text(
+                text = links,
+                style = MaterialTheme.typography.labelMedium,
+                fontWeight = FontWeight.Medium,
+                // An unconfirmed name asks for the owner's attention.
+                color = if (source.unconfirmed.isNotEmpty()) g.accent else MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        }
     }
 }
 
 @Composable
 private fun MetaLine(meta: TaskMeta) {
+    val g = LocalGlass.current
     Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        Text(
-            meta.dueText,
-            style = MaterialTheme.typography.bodySmall,
-            fontWeight = if (meta.overdue) FontWeight.SemiBold else FontWeight.Normal,
-            color = if (meta.overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
-        )
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+            Text(
+                meta.dueText,
+                style = MaterialTheme.typography.bodySmall,
+                fontWeight = if (meta.overdue) FontWeight.SemiBold else FontWeight.Normal,
+                color = if (meta.overdue) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+            if (meta.createdByAi) {
+                Icon(WabIcons.Sparkle, contentDescription = stringResource(R.string.created_by_ai), tint = g.accent, modifier = Modifier.size(15.dp))
+            }
+        }
         if (meta.contextName != null) {
             ContextDot(meta.contextColor)
             Text(meta.contextName, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)

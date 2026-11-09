@@ -68,7 +68,11 @@ class DirectoryRepository(
         },
     )
 
-    override suspend fun confirmChatContext(id: String) = patchChat(id, buildJsonObject { put("contextConfirmed", true) })
+    /** On a direct chat this confirms the person's context; the sync brings the person along. */
+    override suspend fun confirmChatContext(id: String) {
+        patchChat(id, buildJsonObject { put("contextConfirmed", true) })
+        refreshQuietly()
+    }
 
     override suspend fun setChatAutoCreate(id: String, enabled: Boolean) = patchChat(id, buildJsonObject { put("autoCreate", enabled) })
 
@@ -95,9 +99,17 @@ class DirectoryRepository(
         hooks.localDataChanged()
     }
 
+    /** Also changes the person's direct chats, which share their context: refresh them too. */
     suspend fun setPersonContext(id: String, contextId: String?) {
         api.patchPerson(id, buildJsonObject { put("defaultContextId", contextId) })
         refreshPerson(id)
+        refreshQuietly()
+    }
+
+    suspend fun confirmPersonContext(id: String) {
+        api.patchPerson(id, buildJsonObject { put("contextConfirmed", true) })
+        refreshPerson(id)
+        refreshQuietly()
     }
 
     suspend fun renamePerson(id: String, displayName: String) {

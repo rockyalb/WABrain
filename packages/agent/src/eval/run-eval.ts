@@ -49,7 +49,7 @@ async function main(): Promise<number> {
   for (const evalCase of selected) {
     try {
       const result = await analyzeChat(providers, buildCaseMemory(evalCase), { maxRetries: 1 });
-      const score = scoreCase(evalCase, result.actions);
+      const score = scoreCase(evalCase, result.actions, result.involves);
       scores.push(score);
       inputTokens += result.run.inputTokens ?? 0;
       outputTokens += result.run.outputTokens ?? 0;

@@ -79,8 +79,10 @@ changed after the cursor.
 ## Tasks
 
 - `GET /v1/tasks?status=open|done|cancelled|closed&kind=&contextId=&chatId=&personId=`
-  returns a list. `closed` means done or cancelled together, newest closed
-  first; the cursor then pages by close time.
+  accepts `sort=default|due_asc|due_desc|created_asc|created_desc|updated_asc|updated_desc`.
+  Explicit sorts use task ID descending to break ties; due dates put undated tasks last in either direction.
+  Restart pagination without a cursor when changing sort. Omitting sort retains the existing ordering and cursor format.
+  `closed` means done or cancelled together; its default order and cursor use close time, newest first.
 - `GET /v1/tasks/:id` returns
   `{ task: Task, events: [TaskEvent], evidence: [MessageView] }`.
 - `POST /v1/tasks` creates a manual task from
@@ -91,8 +93,14 @@ changed after the cursor.
   - When `dueAt` is a date only (`YYYY-MM-DD`), the server resolves it to
     endOfWorkDay and sets `dueHasTime=false`.
 - `PATCH /v1/tasks/:id` accepts
-  `{ title?, description?, dueAt?, dueHasTime?, contextId?, kind? }` and returns
-  `Task`.
+  `{ title?, description?, dueAt?, dueHasTime?, contextId?, kind?, links? }` and
+  returns `Task`. `links` is the whole list of task links the owner wants:
+  `[{ name?, chatId }]`, where `chatId` links that chat (a pick for an
+  unconfirmed name, or a chat added by hand) and `chatId: null` keeps the
+  unconfirmed link with that `name`. Links left out are removed; the task's own
+  chat and unknown chats are refused (`400`), at most 5. A Task's `links` are
+  `[{ name, chatId | null, candidates: [{ chatId, name }], source: ai | owner }]`;
+  a confirmed link (chatId set) lets that chat's analysis close the task.
 - `POST /v1/tasks/:id/complete`, `/reopen`, and `/cancel` return `Task`. Each
   writes a TaskEvent whose actor is the owner.
 - `POST /v1/task-events/:id/undo` returns `Task`. It returns `409 conflict` when
@@ -106,15 +114,20 @@ changed after the cursor.
   `task` is nullable (for example a rejected create, or a deleted result task);
   a missing item returns `404`. The browser uses the same route at `/web/review/:id`.
 - `POST /v1/review/:id/accept` `{ edits?, closeAs? }` applies the item's action. For a
-  `create`, `edits` may override the title, description, dueAt, contextId, or
-  kind, and `closeAs` (`done` or `cancelled`) closes the new task at once, for a
+  `create`, `edits` may override the title, description, dueAt, contextId,
+  kind, or links (as in `PATCH /v1/tasks/:id`), and `closeAs` (`done` or `cancelled`) closes the new task at once, for a
   create whose `handled` hint says a later message already dealt with it. It
   returns `{ reviewItem, task }`.
 - A pending `create` carries `handled`: null, or `{ status: done | cancelled,
   evidenceMessageIds, confidence, excerpt, fromOwner, at }` when a message after
   the request (in a later burst, or the same one: the create's
-  `alreadyHandled`, reason `already_handled`) suggests it was already handled
-  before it was reviewed.
+  `alreadyHandled`, when the policy kept it in Review) suggests it was already
+  handled before it was reviewed.
+- A `link` item ("Confirm contact") carries `{ type: "link", taskId, links }`
+  for a task created automatically with links. Accept keeps the task's current
+  links, or saves `edits.links`; reject removes the links the analysis
+  proposed. Its notification payload has `needsPick: true` when a name still
+  needs a contact picked.
 - `POST /v1/review/:id/reject` returns `{ reviewItem }`.
 - Every decision is stored as a labelled evaluation example.
 
@@ -130,14 +143,18 @@ changed after the cursor.
 - `PATCH /v1/chats/:id` accepts
   `{ mode?, defaultContextId?, contextConfirmed?, autoCreate?, minimumAutoConfidence?, aliases? }`
   and returns `Chat`. Setting `mode` to `off` purges that chat's stored messages
-  and media.
+  and media. A direct chat's context is its person's: on a direct chat,
+  `defaultContextId` and `contextConfirmed` change the person, and the chat
+  always reports the person's values.
 - `DELETE /v1/chats/:id/data` deletes the chat's messages, media, derived text,
   and embeddings. Its tasks are kept, but their evidence links are removed.
 
 ## People
 
 - `GET /v1/people?q=` returns a list, and `GET /v1/people/:id` returns `Person`.
-- `PATCH /v1/people/:id` accepts `{ displayName?, defaultContextId? }`.
+- `PATCH /v1/people/:id` accepts `{ displayName?, defaultContextId?, contextConfirmed? }`.
+  Setting `defaultContextId` confirms it; `contextConfirmed: true` confirms a
+  suggested context without changing it. The person's direct chats share it.
 - `POST /v1/people/:id/facts` accepts `{ key, value }`. The fact is stored with
   owner as its source and marked verified.
 - `PATCH /v1/people/:id/facts/:factId` accepts `{ value?, verified? }`, and
@@ -158,9 +175,8 @@ changed after the cursor.
 
 - `GET /v1/settings` returns `Settings`.
 - `PATCH /v1/settings` accepts
-  `{ timezone?, endOfWorkDay?, dailySummaryTime?, remindersEnabled?, reminderLeadMinutes? }`.
-  The trial fields and `autoCreateThreshold` are read-only here; the setup page
-  changes them.
+  `{ timezone?, endOfWorkDay?, dailySummaryTime?, remindersEnabled?, reminderLeadMinutes?, autoCreateThreshold? }`.
+  The trial fields are read-only here; the setup page changes them.
 
 ## Push (UnifiedPush with Web Push encryption)
 
@@ -172,10 +188,23 @@ changed after the cursor.
 
 ```json
 { "type": "sync" }
-{ "type": "review",   "notificationId": "…", "reviewItemId": "…", "reviewType": "create|possibly_done|…", "title": "…", "from": "Ana · Office" }
+{ "type": "review",   "notificationId": "…", "reviewItemId": "…", "reviewType": "create|possibly_done|…", "title": "…", "from": "Ana · Office", "handled": "done" }
+{ "type": "handled",  "notificationId": "…", "taskId": "…", "title": "…", "status": "done|cancelled", "from": "Ana" }
 { "type": "reminder", "notificationId": "…", "taskId": "…", "title": "…", "dueAt": "…" }
 { "type": "summary",  "notificationId": "…", "open": 12, "dueToday": 3, "overdue": 1, "review": 2 }
 ```
+
+- A `create` review's optional `handled` (`done` or `cancelled`) says a later
+  message shows it already dealt with. The server sends it as a new
+  notification for the same Review item when it learns this, withdrawing the
+  earlier one; devices show one notification per Review item, so it replaces
+  the Accept / Reject alert with "Save as done" (accept with `closeAs`) and
+  Discard (reject).
+- `handled` is informational: a create the analysis saved straight into Done or
+  Cancelled because its own messages showed it handled. Tapping opens the task.
+  It is listed only while the task keeps that status (24 h at most).
+- Clients withdraw a Review notification once a sync shows its item is no
+  longer pending, so a decision made on another device clears it.
 
 - A review's optional `from` says who it came from: the person, "Person · Group"
   for a group chat, or the chat's name when no person is known. It is left out
@@ -238,7 +267,8 @@ changed after the cursor.
 ## Setup (owner)
 
 - `GET /setup/status` reports database and worker health, whether OpenWA is
-  configured, configured model roles, trial/calibration state, and device count.
+  configured, configured model roles, the trial, the policy
+  (`{ trialDays, autoCreateThreshold }`), and device count.
   `GET /setup/openwa/status` separately reads live OpenWA session status.
 - `GET /setup/providers` and `PUT /setup/providers` read and write the provider
   and model settings for text, vision, transcription, and embeddings. API key

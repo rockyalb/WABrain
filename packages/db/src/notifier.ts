@@ -5,12 +5,15 @@ import type { ReviewItemType } from "@wabrain/contracts";
  * sender (built separately) implements `ChangeNotifier`; the shapes mirror the
  * push payloads in docs/API.md.
  *
- * Exactly one event is emitted per committed operation: `review` when a new
- * Review item was created, or a pending one was replaced by a changed proposal
- * (it implies `sync`), otherwise `sync`.
+ * One event is emitted per committed operation: `review` when a new Review
+ * item was created, or a pending one was replaced by a changed proposal (it
+ * implies `sync`), otherwise `sync`. `notification` follows when the operation
+ * also stored another durable notification (a "saved as done" task, a Review
+ * item now shown as already handled) that should be pushed now.
  */
 export type ChangeEvent =
   | { type: "sync" }
+  | { type: "notification" }
   | {
       type: "review";
       reviewItemId: string;

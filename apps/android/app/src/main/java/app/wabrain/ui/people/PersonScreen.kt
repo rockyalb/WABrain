@@ -23,6 +23,8 @@ import androidx.compose.material3.FloatingActionButton
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Button
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
@@ -145,13 +147,35 @@ fun PersonScreen(container: AppContainer, personId: String, onBack: () -> Unit, 
                     modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
                 )
             }
+            val suggested = person.defaultContextId != null && !person.contextConfirmed
+            if (suggested) {
+                val name = contexts.firstOrNull { it.id == person.defaultContextId }?.name ?: person.defaultContextId.orEmpty()
+                Card(
+                    colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer),
+                    modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 4.dp),
+                ) {
+                    Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(stringResource(R.string.chat_context_suggested_long, name))
+                        Text(stringResource(R.string.person_context_suggested_hint), style = MaterialTheme.typography.bodySmall)
+                        Button(enabled = !busy, onClick = { run { container.directory.confirmPersonContext(personId) } }) {
+                            Text(stringResource(R.string.chat_context_confirm, name))
+                        }
+                    }
+                }
+            }
             Dropdown(
-                label = stringResource(R.string.person_default_context),
+                label = stringResource(if (suggested) R.string.chat_context_choose_other else R.string.person_default_context),
                 options = contextOptions(contexts),
                 selected = person.defaultContextId,
                 onSelect = { id -> run { container.directory.setPersonContext(personId, id) } },
                 enabled = !busy,
                 modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+            )
+            Text(
+                stringResource(R.string.person_context_hint),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(horizontal = 16.dp, vertical = 4.dp),
             )
             SectionHeader(stringResource(R.string.person_facts))
             if (person.facts.isEmpty()) {

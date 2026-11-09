@@ -1,6 +1,6 @@
-import type { AskResponse, Chat, Context, MessageView, Person, ReviewItem, Settings, Task, TaskEvent } from "@wabrain/contracts";
+import type { AskResponse, Chat, Context, MessageView, Person, ReviewItem, Settings, Task, TaskEvent, TaskLink } from "@wabrain/contracts";
 
-export type { AskResponse, Chat, Context, MessageView, Person, ReviewItem, Settings, Task, TaskEvent };
+export type { AskResponse, Chat, Context, MessageView, Person, ReviewItem, Settings, Task, TaskEvent, TaskLink };
 
 export interface Snapshot {
   tasks: Task[];
@@ -125,6 +125,7 @@ export function reviewLabel(review: ReviewItem): string {
     case "possibly_cancelled": return "Possibly cancelled";
     case "reschedule": return "Date change";
     case "merge": return "Merge tasks";
+    case "link": return review.action.type === "link" && review.action.links.some((link) => !link.chatId) ? "Who is this?" : "Confirm contact";
   }
 }
 
@@ -164,4 +165,18 @@ export function filterOptions(options: ComboOption[], query: string): ComboOptio
   });
   const rank = (option: ComboOption) => foldText(option.label).startsWith(first) ? 0 : foldText(option.label).split(/\s+/).some((part) => part.startsWith(first)) ? 1 : 2;
   return hits.map((option, index) => ({ option, index })).sort((a, b) => rank(a.option) - rank(b.option) || a.index - b.index).map(({ option }) => option);
+}
+
+/** A chat as the owner knows it: the contact's name for a direct chat, else the chat's name or number. */
+export function chatLabel(chatId: string, data: Pick<Snapshot, "chats" | "people">): string | null {
+  const chat = data.chats.find((item) => item.id === chatId);
+  if (!chat) return null;
+  const person = chat.isGroup ? null : data.people.find((item) => item.id === chat.personId);
+  return person?.displayName ?? chat.name ?? jidPhone(chat.jid) ?? chat.jid;
+}
+
+/** "→ Jordan, Robin?": the other chats a task involves; names still to confirm end in "?". Null without links. */
+export function linkLabel(links: readonly TaskLink[] | undefined, data: Pick<Snapshot, "chats" | "people">): string | null {
+  if (!links?.length) return null;
+  return `→ ${links.map((link) => (link.chatId ? chatLabel(link.chatId, data) ?? link.name : `${link.name}?`)).join(", ")}`;
 }

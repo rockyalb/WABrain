@@ -29,6 +29,7 @@ class SyncRepository(
     private val mutex = Mutex()
 
     suspend fun sync(): SyncResponse = mutex.withLock {
+        val startedAt = clock()
         val cursor = db.meta().get(KEY_CURSOR)
         val response = try {
             api.sync(cursor)
@@ -43,6 +44,7 @@ class SyncRepository(
         }
         apply(response)
         hooks.localDataChanged()
+        hooks.reviewsSynced(db.reviews().all().map { it.id }.toSet(), startedAt)
         response
     }
 

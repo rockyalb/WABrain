@@ -5,7 +5,7 @@ import type { Db } from "../client.js";
 import { notFound } from "../errors.js";
 import { toChat, type ChatRow } from "../mappers.js";
 import { clampLimit, decodeCursor, toPage, type Page, type PageRequest } from "../pagination.js";
-import { chats, messageChunks, messages, participants, personFacts, sourceEvents, taskEvents, tasks } from "../schema.js";
+import { chats, messageChunks, messages, participants, people, personFacts, sourceEvents, taskEvents, tasks } from "../schema.js";
 
 export const likePattern = (q: string) => `%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`;
 
@@ -51,7 +51,29 @@ export type ChatPatch = Partial<
   Pick<Chat, "mode" | "defaultContextId" | "contextConfirmed" | "autoCreate" | "minimumAutoConfidence" | "aliases">
 >;
 
-export async function updateChat(db: Db, id: string, patch: ChatPatch): Promise<Chat> {
+/**
+ * A direct chat's context belongs to its person, so a context change there is written to the person
+ * (a trigger copies it back onto the chat). Group chats keep their own context.
+ */
+export async function updateChat(db: Db, id: string, input: ChatPatch): Promise<Chat> {
+  const { defaultContextId, contextConfirmed, ...rest } = input;
+  const current = await getChatRow(db, id);
+  const patch: ChatPatch = rest;
+  if (!current.isGroup && current.personId) {
+    if (defaultContextId !== undefined || contextConfirmed !== undefined) {
+      await db
+        .update(people)
+        .set({
+          ...(defaultContextId !== undefined ? { defaultContextId } : {}),
+          contextConfirmed: contextConfirmed ?? true,
+          updatedAt: sql`now()`,
+        })
+        .where(eq(people.id, current.personId));
+    }
+  } else {
+    if (defaultContextId !== undefined) patch.defaultContextId = defaultContextId;
+    if (contextConfirmed !== undefined) patch.contextConfirmed = contextConfirmed;
+  }
   const [row] = await db
     .update(chats)
     .set({ ...patch, updatedAt: sql`now()` })

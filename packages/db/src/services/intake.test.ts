@@ -57,7 +57,7 @@ describe("projector", () => {
     const member = "447690000042@s.whatsapp.net";
     await replaceContactNames(db, [
       { jid: direct, name: "Beni Hidraulik" },
-      { jid: member, name: "Mira Zyra" },
+      { jid: member, name: "Mira Office" },
     ]);
     await ingest(makeOpenWaEnvelope({ data: { id: "saved-1", chatId: direct, from: direct, contact: { pushName: "💫B" } } }));
     const chat = await findChatByJid(db, direct);
@@ -71,7 +71,7 @@ describe("projector", () => {
     const rows = await db.select({ waMessageId: messages.waMessageId, senderName: messages.senderName }).from(messages);
     expect(Object.fromEntries(rows.filter((r) => r.waMessageId.startsWith("saved-")).map((r) => [r.waMessageId, r.senderName]))).toEqual({
       "saved-1": "Beni Hidraulik",
-      "saved-2": "Mira Zyra",
+      "saved-2": "Mira Office",
       "saved-3": "~Taylor",
     });
     expect(await findChatByJid(db, "group-9@g.us")).toMatchObject({ name: "Office" });
@@ -99,6 +99,31 @@ describe("projector", () => {
     expect(debounced).toHaveLength(2);
     const chat = await findChatByJid(testDb.database.db, "group-1@g.us");
     expect(chat).toMatchObject({ mode: "mentions_only", isGroup: true, personId: null });
+  });
+
+  it("analyzes a mentions-only group's messages only for its linked tasks while one is open", async () => {
+    const { db } = testDb.database;
+    const group = { chatId: "group-linked@g.us", from: "group-linked@g.us", author: "447690000019@s.whatsapp.net", isGroup: true, chatName: "Design" };
+    const bodyOf = async (body: string) => {
+      await ingest(makeOpenWaEnvelope({ data: { ...group, body } }));
+      const chat = (await findChatByJid(db, "group-linked@g.us"))!;
+      const [row] = await db.select().from(messages).where(eq(messages.body, body));
+      return { chat, row: row! };
+    };
+    const before = await bodyOf("good evening everyone");
+    expect(before.row).toMatchObject({ analyzable: false, linkedOnly: false });
+
+    const service = new TaskService({ database: testDb.database });
+    const { task } = await service.createManualTask({ kind: "todo", title: "Tell the group about the meeting" });
+    await service.updateTask(task.id, { links: [{ chatId: before.chat.id }] });
+    const linked = await bodyOf("ok got it about the meeting");
+    expect(linked.row).toMatchObject({ analyzable: true, linkedOnly: true });
+    const mention = await bodyOf("Alex, are you coming tomorrow?");
+    expect(mention.row).toMatchObject({ analyzable: true, linkedOnly: false });
+
+    await service.setStatus(task.id, "done");
+    const after = await bodyOf("thanks for letting us know");
+    expect(after.row).toMatchObject({ analyzable: false, linkedOnly: false });
   });
 
   it("stores nothing for Off chats, status updates, or view-once media", async () => {

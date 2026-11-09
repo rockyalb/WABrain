@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { Person, PersonFact } from "@wabrain/contracts";
-import { extractPersonFacts, suggestChatContext, type ProfileMessageInput } from "./profile.js";
+import { extractPersonFacts, suggestPersonContext, type ProfileMessageInput } from "./profile.js";
 import { createMockProviders, mockJsonModel } from "./testing/index.js";
 
 const fact = (overrides: Partial<PersonFact>): PersonFact => ({
@@ -25,7 +25,7 @@ const person: Pick<Person, "id" | "displayName" | "languages" | "facts"> = {
 
 const messages: ProfileMessageInput[] = [
   { id: "m1", at: "2026-09-20T09:00:00Z", fromOwner: false, text: "I'm the CFO at Vodafone now, call me on the new number" },
-  { id: "m2", at: "2026-09-20T09:05:00Z", fromOwner: true, text: "Urime Ana! Babai yt si eshte?" },
+  { id: "m2", at: "2026-09-20T09:05:00Z", fromOwner: true, text: "Congrats Ana! How is your dad?" },
   { id: "m3", at: "2026-09-20T09:06:00Z", fromOwner: false, text: "Good, my dad is a doctor in Porto. We're talking about the fibre tender" },
 ];
 
@@ -98,7 +98,7 @@ describe("extractPersonFacts", () => {
   });
 
   it("marks group messages by the subject via fromPerson", async () => {
-    const group: ProfileMessageInput[] = [{ id: "g1", at: "2026-09-20T09:00:00Z", fromOwner: false, fromPerson: false, text: "Ana eshte menaxhere" }];
+    const group: ProfileMessageInput[] = [{ id: "g1", at: "2026-09-20T09:00:00Z", fromOwner: false, fromPerson: false, text: "Ana is a manager" }];
     const model = mockJsonModel({ facts: [raw({ sourceMessageIds: ["g1"], value: "manager" })] });
     const result = await extractPersonFacts(createMockProviders({ text: model }), person, group);
     expect(result.facts[0]).toMatchObject({ value: "manager", selfClaimed: false });
@@ -106,40 +106,40 @@ describe("extractPersonFacts", () => {
   });
 });
 
-describe("suggestChatContext", () => {
+describe("suggestPersonContext", () => {
   const contexts = [
     { id: "ctx-work", name: "Work" },
     { id: "ctx-personal", name: "Personal" },
   ];
 
   it("keeps the owner's choice", () => {
-    expect(suggestChatContext({ defaultContextId: "ctx-personal", facts: [] }, contexts)).toEqual({ contextId: "ctx-personal", confidence: 1 });
+    expect(suggestPersonContext({ defaultContextId: "ctx-personal", facts: [] }, contexts)).toEqual({ contextId: "ctx-personal", confidence: 1 });
   });
 
   it("suggests Work for clients, companies and roles", () => {
-    const suggestion = suggestChatContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "client", verified: true }), fact({ key: "company", value: "Vodafone" })] }, contexts);
+    const suggestion = suggestPersonContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "client", verified: true }), fact({ key: "company", value: "Vodafone" })] }, contexts);
     expect(suggestion.contextId).toBe("ctx-work");
     expect(suggestion.confidence).toBeGreaterThan(0.8);
   });
 
   it("suggests Personal for family and friends", () => {
-    expect(suggestChatContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "sister", verified: true })] }, contexts)).toEqual({
+    expect(suggestPersonContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "sister", verified: true })] }, contexts)).toEqual({
       contextId: "ctx-personal",
       confidence: 1,
     });
-    expect(suggestChatContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "childhood friend", confidence: 0.9 })] }, contexts).contextId).toBe(
+    expect(suggestPersonContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "childhood friend", confidence: 0.9 })] }, contexts).contextId).toBe(
       "ctx-personal",
     );
   });
 
   it("lowers confidence when signals conflict and returns null without any", () => {
-    const mixed = suggestChatContext(
+    const mixed = suggestPersonContext(
       { defaultContextId: null, facts: [fact({ key: "relationship", value: "friend", confidence: 0.6 }), fact({ key: "company", value: "Vodafone", confidence: 0.6 })] },
       contexts,
     );
     expect(mixed.contextId).toBe("ctx-personal");
     expect(mixed.confidence).toBeLessThan(0.6);
-    expect(suggestChatContext({ defaultContextId: null, facts: [] }, contexts)).toEqual({ contextId: null, confidence: 0 });
+    expect(suggestPersonContext({ defaultContextId: null, facts: [] }, contexts)).toEqual({ contextId: null, confidence: 0 });
   });
 
   it("matches alternative context names", () => {
@@ -147,7 +147,7 @@ describe("suggestChatContext", () => {
       { id: "a", name: "Business" },
       { id: "b", name: "Home" },
     ];
-    expect(suggestChatContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "colleague", verified: true })] }, named).contextId).toBe("a");
-    expect(suggestChatContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "cousin", verified: true })] }, named).contextId).toBe("b");
+    expect(suggestPersonContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "colleague", verified: true })] }, named).contextId).toBe("a");
+    expect(suggestPersonContext({ defaultContextId: null, facts: [fact({ key: "relationship", value: "cousin", verified: true })] }, named).contextId).toBe("b");
   });
 });

@@ -31,6 +31,11 @@ export type ExpectedAction =
       contextId?: string | null;
       /** The same burst already shows it done / no longer needed (alreadyHandled); null = must not be flagged. */
       handled?: "done" | "cancelled" | null;
+      /**
+       * Other people or groups the task involves: each entry must appear (diacritic- and case-folded) in one
+       * of the returned names, so "jordan" matches "Jordan". [] = none may be returned.
+       */
+      involves?: string[];
     }
   | { type: "complete" | "cancel"; taskId: string }
   | { type: "reschedule"; taskId: string; dueDate: string; dueTime?: string | null }
@@ -49,6 +54,8 @@ export interface EvalCase {
   openTasks?: EvalOpenTask[];
   /** Creates proposed earlier that still wait in the owner's Review (ids are review item ids). */
   pendingTasks?: EvalOpenTask[];
+  /** Tasks (or pending creates) from other chats linked to this chat. */
+  linkedTasks?: Array<EvalOpenTask & { fromChat: string; pending?: boolean }>;
   context?: EvalMessage[];
   burst: EvalMessage[];
   expected: ExpectedAction[];

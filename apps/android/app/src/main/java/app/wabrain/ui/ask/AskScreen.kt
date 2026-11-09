@@ -56,11 +56,13 @@ import app.wabrain.R
 import app.wabrain.data.api.AskCitationDto
 import app.wabrain.data.api.TaskActionDto
 import app.wabrain.data.db.dto
+import app.wabrain.domain.ComboFilter
 import app.wabrain.domain.DueFormatter
 import app.wabrain.domain.Instants
 import app.wabrain.ui.common.DatePickerModal
 import app.wabrain.ui.common.Dropdown
 import app.wabrain.ui.common.ErrorBanner
+import app.wabrain.ui.common.SearchableDropdown
 import app.wabrain.ui.common.TaskEditorDialog
 import app.wabrain.ui.common.errorText
 import app.wabrain.ui.common.rememberDueFormatter
@@ -88,6 +90,7 @@ fun AskScreen(container: AppContainer, onOpenConversation: (String, String?) -> 
     val formatter = rememberDueFormatter(zone)
     val dateFormat = remember { DateTimeFormatter.ofLocalizedDate(FormatStyle.MEDIUM).withLocale(Locale.getDefault()) }
     val chatNames = remember(chats) { chats.associate { it.id to (it.name ?: it.jid) } }
+    val personOptions = remember(people, chats) { ComboFilter.people(people, chats) }
 
     var question by rememberSaveable { mutableStateOf("") }
     var pickFrom by remember { mutableStateOf(false) }
@@ -123,12 +126,13 @@ fun AskScreen(container: AppContainer, onOpenConversation: (String, String?) -> 
 
             // Filters: person, context, date range.
             Row(Modifier.padding(horizontal = 16.dp, vertical = 4.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                Dropdown(
-                    stringResource(R.string.ask_person),
-                    listOf<Pair<String?, String>>(null to stringResource(R.string.filter_all)) + people.map { it.id to it.displayName },
-                    state.filters.personId,
-                    vm::setPerson,
-                    Modifier.weight(1f),
+                SearchableDropdown(
+                    label = stringResource(R.string.ask_person),
+                    options = personOptions,
+                    selected = state.filters.personId,
+                    onSelect = vm::setPerson,
+                    modifier = Modifier.weight(1f),
+                    emptyLabel = stringResource(R.string.filter_all),
                 )
                 Dropdown(
                     stringResource(R.string.ask_context),

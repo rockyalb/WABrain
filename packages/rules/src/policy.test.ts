@@ -7,7 +7,6 @@ const NOW = new Date("2026-10-15T10:00:00+02:00");
 const baseCtx: PolicyContext = {
   settings: { trialStartedAt: "2026-09-01T00:00:00+02:00", trialDays: 7, autoCreateThreshold: 0.8 },
   chat: { id: "chat-1", mode: "on", autoCreate: true, minimumAutoConfidence: null },
-  calibration: { threshold: 0.8 },
   now: NOW,
   evidenceMessages: [
     { id: "own-1", fromOwner: true },
@@ -96,21 +95,9 @@ describe("decideAction: create", () => {
     expect(decideAction(create(), ctx)).toEqual({ decision: { outcome: "review", reason: "trial_period" }, reviewType: "create" });
   });
 
-  it("keeps creates in Review after the trial until the active profile is calibrated", () => {
-    const ctx = { ...baseCtx, calibration: null };
-    expect(decideAction(create(), ctx)).toEqual({
-      decision: { outcome: "review", reason: "calibration_required" },
-      reviewType: "create",
-    });
-  });
-
-  it("uses calibration as an additional floor above the configured and per-chat thresholds", () => {
-    const configured = { ...baseCtx, settings: { ...baseCtx.settings, autoCreateThreshold: 0.6 }, calibration: { threshold: 0.9 } };
-    expect(decideAction(create({ confidence: 0.89 }), configured).decision.reason).toBe("below_threshold");
-    expect(decideAction(create({ confidence: 0.9 }), configured).decision.outcome).toBe("apply");
-
-    const chatFloor = { ...configured, chat: { ...configured.chat, minimumAutoConfidence: 0.95 } };
-    expect(decideAction(create({ confidence: 0.94 }), chatFloor).decision.reason).toBe("below_threshold");
+  it("applies a create after the trial on the threshold alone", () => {
+    const configured = { ...baseCtx, settings: { ...baseCtx.settings, autoCreateThreshold: 0.6 } };
+    expect(decideAction(create({ confidence: 0.6 }), configured).decision).toEqual({ outcome: "apply", reason: "auto_create" });
   });
 
   it("reviews when auto-create is off for the chat", () => {
@@ -126,26 +113,21 @@ describe("decideAction: create", () => {
   it("uses the chat's confidence override", () => {
     const strict = { ...baseCtx, chat: { ...baseCtx.chat, minimumAutoConfidence: 0.97 } };
     expect(decideAction(create({ confidence: 0.95 }), strict).decision.reason).toBe("below_threshold");
-    const lenient = { ...baseCtx, chat: { ...baseCtx.chat, minimumAutoConfidence: 0.5 }, calibration: { threshold: 0.55 } };
+    const lenient = { ...baseCtx, chat: { ...baseCtx.chat, minimumAutoConfidence: 0.5 } };
     expect(decideAction(create({ confidence: 0.6 }), lenient).decision.reason).toBe("auto_create");
   });
 
-  it("never lets a lenient chat override go below the calibrated threshold", () => {
-    const lenient = { ...baseCtx, chat: { ...baseCtx.chat, minimumAutoConfidence: 0.5 } };
-    expect(decideAction(create({ confidence: 0.6 }), lenient).decision.reason).toBe("below_threshold");
+  it("applies a create its own burst already shows handled, to be saved straight as closed", () => {
+    const handled = create({ alreadyHandled: { status: "done", evidenceMessageIds: ["m2"] } });
+    expect(decideAction(handled, baseCtx)).toEqual({ decision: { outcome: "apply", reason: "already_handled" }, reviewType: null });
   });
 
-  it("treats an invalid calibration as missing", () => {
-    for (const threshold of [Number.NaN, -0.1, 1.5]) {
-      expect(decideAction(create(), { ...baseCtx, calibration: { threshold } }).decision.reason).toBe("calibration_required");
-    }
-  });
-
-  it("always reviews a create its own burst already shows handled, even when it would auto-apply", () => {
-    expect(decideAction(create({ alreadyHandled: { status: "done", evidenceMessageIds: ["m2"] } }), baseCtx)).toEqual({
-      decision: { outcome: "review", reason: "already_handled" },
-      reviewType: "create",
-    });
+  it("keeps an already handled create to the same gates as any create", () => {
+    const handled = { status: "done" as const, evidenceMessageIds: ["m2"] };
+    const trial = { ...baseCtx, settings: { ...baseCtx.settings, trialStartedAt: "2026-10-14T00:00:00+02:00" } };
+    expect(decideAction(create({ alreadyHandled: handled }), trial).decision.reason).toBe("trial_period");
+    expect(decideAction(create({ alreadyHandled: handled, confidence: 0.5 }), baseCtx).decision.reason).toBe("below_threshold");
+    expect(decideAction(create({ alreadyHandled: handled, ambiguityReasons: ["unclear"] }), baseCtx).decision.reason).toBe("ambiguous");
   });
 
   it("reviews ambiguous creates", () => {
@@ -183,10 +165,8 @@ describe.each([
     expect(decideAction(make(), ctx).decision.outcome).toBe("apply");
   });
 
-  it("is not gated by create calibration, only by the automatic-change threshold", () => {
-    expect(decideAction(make(), { ...baseCtx, calibration: null }).decision.outcome).toBe("apply");
-    // A high calibrated create floor does not raise the bar for owner-evidenced changes.
-    expect(decideAction(make({ confidence: 0.85 }), { ...baseCtx, calibration: { threshold: 0.99 } }).decision.outcome).toBe("apply");
+  it("is gated by the automatic-change threshold", () => {
+    expect(decideAction(make({ confidence: 0.85 }), baseCtx).decision.outcome).toBe("apply");
     const strictChat = { ...baseCtx, chat: { ...baseCtx.chat, minimumAutoConfidence: 0.9 } };
     expect(decideAction(make({ confidence: 0.85 }), strictChat).decision.reason).toBe("below_threshold");
   });
@@ -300,5 +280,50 @@ describe("changes to a create still pending in Review", () => {
 
   it("does not merge pending creates", () => {
     expect(decideAction(merge(["t-open", "r-pending"]), ctx).decision).toEqual({ outcome: "drop", reason: "unknown_task" });
+  });
+});
+
+describe("tasks linked to another chat", () => {
+  // t-casey belongs to Casey's chat (chat-2) and is linked to this chat (chat-1, Jordan's).
+  const ctx: PolicyContext = {
+    ...baseCtx,
+    evidenceMessages: [...baseCtx.evidenceMessages, { id: "linked-1", fromOwner: false, linkedOnly: true }, { id: "linked-own", fromOwner: true, linkedOnly: true }],
+    tasks: [...baseCtx.tasks, { id: "t-casey", status: "open", chatId: "chat-2", linkedChatIds: ["chat-1"] }],
+    pendingCreates: [{ id: "rv-casey", chatId: "chat-2", linkedChatIds: ["chat-1"] }],
+  };
+
+  it("lets the linked chat complete or cancel it under the normal rules", () => {
+    expect(decideAction(complete({ taskId: "t-casey" }), ctx).decision).toEqual({ outcome: "apply", reason: "owner_evidence" });
+    expect(decideAction(cancel({ taskId: "t-casey", evidenceMessageIds: ["other-1"] }), ctx)).toEqual({
+      decision: { outcome: "review", reason: "non_owner_evidence" },
+      reviewType: "possibly_cancelled",
+    });
+    expect(decideAction(complete({ taskId: "t-casey", confidence: 0.5 }), ctx).decision.outcome).toBe("review");
+  });
+
+  it("never lets the linked chat reschedule or merge it", () => {
+    expect(decideAction(reschedule({ taskId: "t-casey" }), ctx).decision).toEqual({ outcome: "drop", reason: "unknown_task" });
+    expect(decideAction(merge(["t-open", "t-casey"]), ctx).decision).toEqual({ outcome: "drop", reason: "unknown_task" });
+  });
+
+  it("still drops another chat's task that is not linked here", () => {
+    expect(decideAction(complete({ taskId: "t-other-chat" }), ctx).decision).toEqual({ outcome: "drop", reason: "unknown_task" });
+  });
+
+  it("marks a linked create still pending in Review as handled, but never moves its due", () => {
+    expect(decideAction(complete({ taskId: "rv-casey" }), ctx)).toEqual({ decision: { outcome: "review", reason: "pending_create" }, reviewType: "create" });
+    expect(decideAction(reschedule({ taskId: "rv-casey" }), ctx).decision.outcome).toBe("drop");
+  });
+
+  it("lets messages analyzed only for linked tasks close those tasks and nothing else", () => {
+    expect(decideAction(complete({ taskId: "t-casey", evidenceMessageIds: ["linked-own"] }), ctx).decision).toEqual({
+      outcome: "apply",
+      reason: "owner_evidence",
+    });
+    expect(decideAction(complete({ taskId: "rv-casey", evidenceMessageIds: ["linked-1"] }), ctx).decision.reason).toBe("pending_create");
+    expect(decideAction(complete({ taskId: "t-open", evidenceMessageIds: ["linked-own"] }), ctx).decision).toEqual({ outcome: "drop", reason: "linked_only" });
+    expect(decideAction(create({ evidenceMessageIds: ["linked-1"] }), ctx).decision).toEqual({ outcome: "drop", reason: "linked_only" });
+    // One message that was analyzed in its own right is enough for the normal rules.
+    expect(decideAction(create({ evidenceMessageIds: ["linked-1", "other-1"] }), ctx).decision.reason).not.toBe("linked_only");
   });
 });

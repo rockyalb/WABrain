@@ -6,7 +6,6 @@
 import { ProviderKindSchema } from "@wabrain/agent";
 import { jobNames, type JobName } from "@wabrain/jobs";
 import {
-  AutoCreateStatusSchema,
   ChatModeSchema,
   ChatSchema,
   ContextSchema,
@@ -20,6 +19,7 @@ import {
   TaskEventSchema,
   TaskKindSchema,
   TaskSchema,
+  TaskSortSchema,
   TaskStatusSchema,
 } from "@wabrain/contracts";
 import { z } from "zod";
@@ -45,6 +45,7 @@ export const TaskListQuerySchema = PageQuerySchema.extend({
   contextId: Id.optional(),
   chatId: Id.optional(),
   personId: Id.optional(),
+  sort: TaskSortSchema.optional(),
 });
 
 export const CreateTaskRequestSchema = z.object({
@@ -59,6 +60,17 @@ export const CreateTaskRequestSchema = z.object({
   personId: Id.nullable().optional(),
 });
 
+/**
+ * The task's links as the owner wants them (the whole list). chatId: link that chat (a pick for an
+ * unconfirmed name, or a chat added by hand). chatId null: keep the unconfirmed link with this name.
+ * Links left out are removed.
+ */
+export const LinkInputSchema = z.object({
+  name: z.string().trim().max(80).nullable().optional(),
+  chatId: Id.nullable(),
+});
+const LinksInput = z.array(LinkInputSchema).max(5);
+
 export const UpdateTaskRequestSchema = z.object({
   title: z.string().trim().min(1).max(180).optional(),
   description: z.string().max(4000).optional(),
@@ -66,6 +78,7 @@ export const UpdateTaskRequestSchema = z.object({
   dueHasTime: z.boolean().optional(),
   contextId: Id.nullable().optional(),
   kind: TaskKindSchema.optional(),
+  links: LinksInput.optional(),
 });
 
 export const TaskDetailSchema = z.object({
@@ -85,6 +98,8 @@ export const AcceptReviewRequestSchema = z.object({
       dueHasTime: z.boolean().optional(),
       contextId: Id.nullable().optional(),
       kind: TaskKindSchema.optional(),
+      /** Creates only: the links the new task gets. */
+      links: LinksInput.optional(),
     })
     .optional(),
   /** Creates only: accept and close the new task at once (a later message says it was already handled). */
@@ -110,6 +125,7 @@ export const ChatListQuerySchema = PageQuerySchema.extend({
 
 export const UpdateChatRequestSchema = z.object({
   mode: ChatModeSchema.optional(),
+  /** On a direct chat these two set the person's context, which the chat shares. */
   defaultContextId: Id.nullable().optional(),
   contextConfirmed: z.boolean().optional(),
   autoCreate: z.boolean().optional(),
@@ -121,7 +137,10 @@ export const PeopleQuerySchema = PageQuerySchema.extend({ q: z.string().max(100)
 
 export const UpdatePersonRequestSchema = z.object({
   displayName: z.string().trim().min(1).max(120).optional(),
+  /** Also the context of the person's direct chats. Setting it confirms it. */
   defaultContextId: Id.nullable().optional(),
+  /** Confirms a suggested context without changing it. */
+  contextConfirmed: z.literal(true).optional(),
 });
 
 export const CreateFactRequestSchema = z.object({
@@ -157,6 +176,8 @@ export const UpdateSettingsRequestSchema = z.object({
   dailySummaryTime: LocalTimeSchema.nullable().optional(),
   remindersEnabled: z.boolean().optional(),
   reminderLeadMinutes: z.number().int().min(0).max(10080).optional(),
+  /** The automatic-change threshold, also set by the setup PWA's policy page. */
+  autoCreateThreshold: z.number().min(0).max(1).optional(),
 });
 
 export const UpdatePolicyRequestSchema = z.object({
@@ -222,13 +243,10 @@ export const SetupStatusSchema = z.object({
   openwa: z.object({ configured: z.boolean() }),
   providers: z.object({ configured: z.array(z.string()) }),
   trial: z.object({ active: z.boolean(), startedAt: IsoDateTime, endsAt: IsoDateTime, days: z.number().int() }),
-  /** Why creates are (not) automatic: the trial, calibration of the current model/prompt, or active. */
-  autoCreate: AutoCreateStatusSchema,
+  policy: z.object({ trialDays: z.number().int(), autoCreateThreshold: z.number().min(0).max(1) }),
   devices: z.object({ count: z.number().int() }),
 });
 
-/** GET /v1/settings: the settings plus the read-only auto-create status. */
-export const SettingsResponseSchema = SettingsSchema.extend({ autoCreate: AutoCreateStatusSchema });
 
 // Model providers (setup) ------------------------------------------------------------
 

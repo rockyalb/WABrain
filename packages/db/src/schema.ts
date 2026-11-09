@@ -7,6 +7,7 @@
  * and update, and a delete trigger writes a row to `sync_tombstones`. See
  * drizzle/0001_sync_triggers.sql and src/repos/sync.ts.
  */
+import type { TaskLink } from "@wabrain/contracts";
 import { sql } from "drizzle-orm";
 import {
   bigint,
@@ -118,7 +119,9 @@ export const people = pgTable(
     primaryJid: text("primary_jid"),
     jids: textArray("jids"),
     languages: textArray("languages"),
+    /** Copied onto the person's direct chats by a trigger; direct chats have no context of their own. */
     defaultContextId: text("default_context_id").references(() => contexts.id, { onDelete: "set null" }),
+    contextConfirmed: boolean("context_confirmed").notNull().default(true),
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     syncVersion: syncVersion(),
@@ -231,6 +234,11 @@ export const messages = pgTable(
     source: text("source", { enum: ["webhook", "history"] }).notNull(),
     /** Set at projection: the chat rule selected this message for task analysis (not context only). */
     analyzable: boolean("analyzable").notNull().default(false),
+    /**
+     * Analyzed only because its "mentions only" group has open linked tasks, not for a mention: it may
+     * close those tasks and nothing else (the policy's linked_only rule).
+     */
+    linkedOnly: boolean("linked_only").notNull().default(false),
     /** The analysis run that consumed this message; null while it waits for analysis. */
     analysisRunId: text("analysis_run_id"),
     sentAt: ts("sent_at").notNull(),
@@ -443,7 +451,11 @@ export const tasks = pgTable(
     contextId: text("context_id").references(() => contexts.id, { onDelete: "set null" }),
     chatId: text("chat_id").references(() => chats.id, { onDelete: "set null" }),
     personId: text("person_id").references(() => people.id, { onDelete: "set null" }),
+    /** Other chats the task involves (TaskLink[]); a confirmed link lets that chat close the task. */
+    links: jsonb("links").$type<TaskLink[]>().notNull().default([]),
     origin: text("origin", { enum: ["ai", "manual", "import"] }).notNull(),
+    /** Who created the task: "ai" only when it was applied without the owner accepting it in Review. */
+    createdBy: text("created_by", { enum: ["ai", "owner", "system"] }),
     language: text("language"),
     confidence: real("confidence"),
     evidenceMessageIds: textArray("evidence_message_ids"),
@@ -451,6 +463,7 @@ export const tasks = pgTable(
     createdAt: createdAt(),
     updatedAt: updatedAt(),
     closedAt: ts("closed_at"),
+    closedBy: text("closed_by", { enum: ["ai", "owner", "system"] }),
     syncVersion: syncVersion(),
   },
   (t) => [
@@ -458,6 +471,7 @@ export const tasks = pgTable(
     index("tasks_chat_idx").on(t.chatId),
     index("tasks_person_idx").on(t.personId),
     index("tasks_sync_idx").on(t.syncVersion),
+    index("tasks_links_gin").using("gin", sql`${t.links} jsonb_path_ops`),
   ],
 );
 
@@ -466,7 +480,7 @@ export const reviewItems = pgTable(
   {
     id: text("id").primaryKey(),
     type: text("type", {
-      enum: ["create", "possibly_done", "possibly_cancelled", "reschedule", "merge"],
+      enum: ["create", "possibly_done", "possibly_cancelled", "reschedule", "merge", "link"],
     }).notNull(),
     state: text("state", { enum: ["pending", "accepted", "rejected"] }).notNull().default("pending"),
     taskId: text("task_id").references(() => tasks.id, { onDelete: "cascade" }),
@@ -628,8 +642,8 @@ export const settings = pgTable(
     remindersEnabled: boolean("reminders_enabled").notNull().default(true),
     reminderLeadMinutes: integer("reminder_lead_minutes").notNull().default(60),
     trialStartedAt: ts("trial_started_at").notNull().defaultNow(),
-    trialDays: integer("trial_days").notNull().default(7),
-    autoCreateThreshold: real("auto_create_threshold").notNull().default(0.85),
+    trialDays: integer("trial_days").notNull().default(0),
+    autoCreateThreshold: real("auto_create_threshold").notNull().default(0.8),
     /** Sync cursors at or below this version must take a full snapshot (after a wipe). */
     syncResetVersion: bigint("sync_reset_version", { mode: "number" }).notNull().default(0),
     updatedAt: updatedAt(),

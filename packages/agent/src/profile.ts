@@ -148,10 +148,10 @@ export interface ContextSuggestion {
 }
 
 /**
- * Suggests a chat's default context from the person profile, for the owner to confirm once.
+ * Suggests a person's default context from their profile, for the owner to confirm once.
  * The owner's own choice wins; otherwise company/role/relationship facts point to Work or Personal.
  */
-export function suggestChatContext(
+export function suggestPersonContext(
   person: Pick<Person, "defaultContextId" | "facts">,
   contexts: ReadonlyArray<Pick<Context, "id" | "name">>,
 ): ContextSuggestion {

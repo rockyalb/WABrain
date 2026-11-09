@@ -1,8 +1,8 @@
 /**
  * profile-chat: extracts person facts from a direct chat (owner-entered and verified facts are never
  * changed; self-claims stay unverified), refreshes the person's languages from the per-message language
- * tags, and suggests a default context for chats without one (contextConfirmed=false until the owner
- * confirms).
+ * tags, and suggests a default context for a person without one (contextConfirmed=false until the
+ * owner confirms; the person's direct chats share it).
  *
  * Every message is read once, in checkpointed batches in storage order (see db profile-progress), so
  * imported history reaches the profile too, not only the latest messages:
@@ -17,7 +17,7 @@
  * (recovered after a failure). It reads that message with a few neighbours and keeps only facts drawn
  * from it, without moving the cursor.
  */
-import { extractPersonFacts, suggestChatContext, type ProfileMessageInput } from "@wabrain/agent";
+import { extractPersonFacts, suggestPersonContext, type ProfileMessageInput } from "@wabrain/agent";
 import {
   applyProposedFacts,
   countPendingMedia,
@@ -40,7 +40,7 @@ import {
   safeNotify,
   saveProfileProgress,
   setPersonLanguages,
-  suggestChatDefaultContext,
+  suggestPersonDefaultContext,
   clearProfileTarget,
   withFacts,
   type MessageRow,
@@ -175,10 +175,10 @@ export async function runChatProfile(deps: PipelineDeps, chatId: string): Promis
     const languages = languagesFromCounts(await languageCounts(tx, chatId, new Date(now.getTime() - LANGUAGE_WINDOW_MS)));
     const languagesChanged = languages.length > 0 && (await setPersonLanguages(tx, person!.id, languages));
     let contextSuggested = false;
-    if (!chat.defaultContextId) {
+    if (!person!.defaultContextId) {
       const [updated] = await withFacts(tx, [await getPersonRow(tx, person!.id)]);
-      const suggestion = suggestChatContext(updated!, await listContexts(tx));
-      if (suggestion.contextId) contextSuggested = await suggestChatDefaultContext(tx, chatId, suggestion.contextId);
+      const suggestion = suggestPersonContext(updated!, await listContexts(tx));
+      if (suggestion.contextId) contextSuggested = await suggestPersonDefaultContext(tx, person!.id, suggestion.contextId);
     }
     // The checkpoint and the day are recorded with the facts, only after a successful extraction.
     await saveProfileProgress(tx, chatId, { cursor, target, localDate: today, at: now });

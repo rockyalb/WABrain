@@ -226,7 +226,7 @@ private fun MainScaffold(container: AppContainer, intent: Intent?, onIntentConsu
                         onOpenConversation = { chatId, messageId -> nav.navigate(ConversationRoute(chatId, messageId)) },
                     )
                 }
-                composable<ChatsRoute> { ChatsScreen(container) }
+                composable<ChatsRoute> { ChatsScreen(container, onOpenPerson = { nav.navigate(PersonRoute(it)) }) }
                 composable<AskRoute> {
                     AskScreen(container, onOpenConversation = { chatId, messageId -> nav.navigate(ConversationRoute(chatId, messageId)) })
                 }

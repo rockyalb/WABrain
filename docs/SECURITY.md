@@ -13,7 +13,7 @@ and a compromised host can read the stored conversations.
   codes, view-once media, and status updates are filtered before storage.
 - All message, filename, OCR, transcript, quote, and document content is
   untrusted evidence. Models propose structured actions; deterministic rules
-  enforce ownership, evidence, ambiguity, calibration, and Review. Prompt
+  enforce ownership, evidence, ambiguity, the confidence threshold, and Review. Prompt
   injection fixtures include non-English examples; they cannot establish perfect
   resistance to every model or input.
 - The adapter permits GET reads only. WABrain has no WhatsApp send,

@@ -7,11 +7,14 @@
  * 3. Opens (or resumes) an analysis run keyed by sha256(chat + burst message ids). The model output and
  *    policy decisions are stored on the run before anything is applied, so a retried job never calls
  *    the model twice for the same burst, and each action is applied exactly once (TaskService actionKey).
- * 4. Builds working memory (with the chat's open tasks and the creates still pending in Review), asks the model, runs the deterministic action policy with evidence
- *    directions from the database, applies each action, and marks the burst consumed.
+ * 4. Builds working memory (with the chat's open tasks, the creates still pending in Review, and the tasks
+ *    of other chats linked to this one), asks the model, resolves the names each create involves into
+ *    links to other chats, runs the deterministic action policy with evidence directions from the
+ *    database, applies each action, and marks the burst consumed.
  */
-import { PROMPT_VERSION, analyzeChat, buildWorkingMemory, type MemoryMessageInput, type OpenTaskInput } from "@wabrain/agent";
+import { PROMPT_VERSION, analyzeChat, buildWorkingMemory, type LinkedTaskInput, type MemoryMessageInput, type OpenTaskInput } from "@wabrain/agent";
 import type { Chat, PolicyDecision, ReviewItem, ReviewItemType, TaskAction } from "@wabrain/contracts";
+import { inArray } from "drizzle-orm";
 import {
   countPendingMedia,
   findAnalysisRunByKey,
@@ -23,6 +26,9 @@ import {
   listMessagesByIds,
   listOpenTasksForChat,
   listPendingCreatesForChat,
+  listLinkableChats,
+  listLinkedOpenTasks,
+  listLinkedPendingCreates,
   listUnanalyzedMessages,
   markMessagesAnalyzed,
   recordAnalysisError,
@@ -34,11 +40,11 @@ import {
   withFacts,
   getPersonRow,
   findTaskRow,
-  resolveTaskCalibration,
+  schema,
   type ApplyResult,
   type MessageRow,
 } from "@wabrain/db";
-import { decideActions, type PolicyResult, type PolicyTask } from "@wabrain/rules";
+import { decideActions, linkedChatIds, resolveTaskLinks, type PolicyResult, type PolicyTask } from "@wabrain/rules";
 import { createHash } from "node:crypto";
 import { checkBudget, recordDeferral } from "./budget.js";
 import type { PipelineDeps } from "./deps.js";
@@ -101,6 +107,31 @@ function toPendingTask(item: ReviewItem): OpenTaskInput | null {
   return { id: item.id, kind, title, dueAt, dueHasTime };
 }
 
+/** Linked tasks for the prompt, each with the name of the chat it came from. */
+async function toLinkedTasks(
+  deps: PipelineDeps,
+  open: ReadonlyArray<{ id: string; kind: OpenTaskInput["kind"]; title: string; dueAt: string | null; dueHasTime: boolean; chatId: string | null }>,
+  pending: readonly ReviewItem[],
+): Promise<LinkedTaskInput[]> {
+  const chatIds = [...new Set([...open.map((task) => task.chatId), ...pending.map((item) => item.chatId)].filter((id): id is string => Boolean(id)))];
+  const names = new Map<string, string | null>();
+  if (chatIds.length > 0) {
+    const rows = await deps.database.db
+      .select({ id: schema.chats.id, name: schema.chats.name })
+      .from(schema.chats)
+      .where(inArray(schema.chats.id, chatIds));
+    for (const row of rows) names.set(row.id, row.name);
+  }
+  const fromChat = (chatId: string | null) => (chatId ? (names.get(chatId) ?? null) : null);
+  return [
+    ...open.map((task) => ({ ...toOpenTask(task), fromChat: fromChat(task.chatId), pending: false })),
+    ...pending.flatMap((item) => {
+      const task = toPendingTask(item);
+      return task ? [{ ...task, fromChat: fromChat(item.chatId), pending: true }] : [];
+    }),
+  ];
+}
+
 async function defer(deps: PipelineDeps, chatId: string, reason: "budget" | "provider", until: Date, role: "text" = "text"): Promise<AnalysisOutcome> {
   await deps.queue.enqueue("analyze-chat", { chatId }, { singletonKey: chatId, startAfter: until });
   await recordDeferral(deps.database, { role, reason, at: deps.now().toISOString(), until: until.toISOString() });
@@ -131,6 +162,10 @@ async function produceOutput(
   const openTasks = await listOpenTasksForChat(db, chat.id);
   const pendingCreates = await listPendingCreatesForChat(db, chat.id);
   const pendingTasks = pendingCreates.map(toPendingTask).filter((task): task is OpenTaskInput => task !== null);
+  // Tasks of other chats that involve this one (it may only close them).
+  const linkedOpen = await listLinkedOpenTasks(db, chat.id);
+  const linkedPending = await listLinkedPendingCreates(db, chat.id);
+  const linkedTasks = await toLinkedTasks(deps, linkedOpen, linkedPending);
   const contexts = await listContexts(db);
   const person = chat.personId && !chat.isGroup ? (await withFacts(db, [await getPersonRow(db, chat.personId)]))[0] ?? null : null;
 
@@ -145,6 +180,7 @@ async function produceOutput(
     quoted: quoted.map(toMemoryMessage),
     openTasks: openTasks.map(toOpenTask),
     pendingTasks,
+    linkedTasks,
   });
 
   let result;
@@ -164,34 +200,48 @@ async function produceOutput(
     refId: runId,
   });
 
+  // Who else each create involves: names resolved to the owner's chats, stored on the action.
+  if (result.involves.some((names) => names.length > 0)) {
+    const linkable = await listLinkableChats(db);
+    result.actions = result.actions.map((action, index) => {
+      const names = result.involves[index] ?? [];
+      if (action.type !== "create" || names.length === 0) return action;
+      const links = resolveTaskLinks(names, linkable, { ownChatId: chat.id, now });
+      return links.length > 0 ? { ...action, links } : action;
+    });
+  }
+
   // Evidence directions come from storage, never from the model; only this chat's messages count.
   const evidenceIds = [...new Set(result.actions.flatMap((action) => action.evidenceMessageIds))];
   const evidence = await listMessagesByIds(db, chat.id, evidenceIds);
-  // Creates auto-apply only with a usable calibration for exactly this provider/model/prompt profile.
-  const calibration = await resolveTaskCalibration(
-    database,
-    { provider: result.run.provider, model: result.run.modelId, promptVersion: result.run.promptVersion },
-    now,
-  );
-  const tasks: PolicyTask[] = openTasks.map((task) => ({ id: task.id, status: task.status, chatId: task.chatId }));
-  const known = new Set([...tasks.map((task) => task.id), ...pendingTasks.map((task) => task.id)]);
+  const tasks: PolicyTask[] = [...openTasks, ...linkedOpen].map((task) => ({
+    id: task.id,
+    status: task.status,
+    chatId: task.chatId,
+    linkedChatIds: linkedChatIds(task.links),
+  }));
+  const allPending = [...pendingCreates, ...linkedPending];
+  const known = new Set([...tasks.map((task) => task.id), ...allPending.map((item) => item.id)]);
   for (const action of result.actions) {
     const ids = action.type === "merge" ? action.taskIds : action.type === "create" ? [] : [action.taskId];
     for (const id of ids) {
       if (known.has(id)) continue;
       const row = await findTaskRow(db, id);
-      if (row) tasks.push({ id: row.id, status: row.status, chatId: row.chatId });
+      if (row) tasks.push({ id: row.id, status: row.status, chatId: row.chatId, linkedChatIds: linkedChatIds(row.links) });
       known.add(id);
     }
   }
   const decisions = decideActions(result.actions, {
     settings,
     chat,
-    calibration: calibration?.threshold != null ? { threshold: calibration.threshold } : null,
     now,
-    evidenceMessages: evidence.map((message) => ({ id: message.id, fromOwner: message.fromOwner })),
+    evidenceMessages: evidence.map((message) => ({ id: message.id, fromOwner: message.fromOwner, linkedOnly: message.linkedOnly })),
     tasks,
-    pendingCreates: pendingCreates.map((item) => ({ id: item.id, chatId: item.chatId })),
+    pendingCreates: allPending.map((item) => ({
+      id: item.id,
+      chatId: item.chatId,
+      linkedChatIds: item.action.type === "create" ? linkedChatIds(item.action.links) : [],
+    })),
   });
 
   await recordAnalysisOutput(db, runId, {

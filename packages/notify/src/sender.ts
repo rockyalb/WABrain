@@ -53,8 +53,8 @@ export interface DeliveryReport {
 }
 
 const silent: PushLogger = { info() {}, warn() {} };
-const TTL_SECONDS: Record<PushPayload["type"], number> = { sync: 3600, review: 7 * 86_400, reminder: 86_400, summary: 12 * 3600 };
-const URGENCY: Record<PushPayload["type"], "normal" | "high"> = { sync: "normal", review: "high", reminder: "high", summary: "normal" };
+const TTL_SECONDS: Record<PushPayload["type"], number> = { sync: 3600, review: 7 * 86_400, reminder: 86_400, summary: 12 * 3600, handled: 86_400 };
+const URGENCY: Record<PushPayload["type"], "normal" | "high"> = { sync: "normal", review: "high", reminder: "high", summary: "normal", handled: "normal" };
 
 export class PushSender {
   private readonly database: Database;

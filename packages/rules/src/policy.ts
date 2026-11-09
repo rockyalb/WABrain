@@ -20,19 +20,21 @@ export function isInTrial(settings: Pick<Settings, "trialStartedAt" | "trialDays
 export interface PolicyEvidenceMessage {
   id: string;
   fromOwner: boolean;
+  /**
+   * True when the message was analyzed only because its "mentions only" group has linked tasks open
+   * (not for a mention). Such messages may only close tasks linked to the chat.
+   */
+  linkedOnly?: boolean;
 }
 
-export type PolicyTask = Pick<Task, "id" | "status" | "chatId">;
+export type PolicyTask = Pick<Task, "id" | "status" | "chatId"> & {
+  /** Chats with a confirmed link to the task: they may complete or cancel it, nothing else. */
+  linkedChatIds?: readonly string[];
+};
 
 export interface PolicyContext {
   settings: Pick<Settings, "trialStartedAt" | "trialDays" | "autoCreateThreshold">;
   chat: Pick<Chat, "id" | "mode" | "autoCreate" | "minimumAutoConfidence">;
-  /**
-   * Usable create calibration for the model/prompt profile that produced the actions (from the owner's
-   * Review decisions). Missing (never calibrated, not enough decisions, or another profile's) keeps
-   * creates in Review after the trial. Only creates read it.
-   */
-  calibration?: { threshold: number } | null;
   now: Date;
   /** The stored messages the actions cite. Unknown evidence ids count as not the owner's. */
   evidenceMessages: readonly PolicyEvidenceMessage[];
@@ -51,6 +53,8 @@ export interface PolicyContext {
 export interface PolicyPendingCreate {
   id: string;
   chatId: string | null;
+  /** Chats the proposed task is linked to (confirmed links). */
+  linkedChatIds?: readonly string[];
 }
 
 export interface PolicyResult {
@@ -76,9 +80,11 @@ export function autoConfidenceThreshold(ctx: Pick<PolicyContext, "settings" | "c
   return ctx.chat.minimumAutoConfidence ?? ctx.settings.autoCreateThreshold;
 }
 
-function usableCalibration(ctx: Pick<PolicyContext, "calibration">): number | null {
-  const threshold = ctx.calibration?.threshold;
-  return typeof threshold === "number" && Number.isFinite(threshold) && threshold >= 0 && threshold <= 1 ? threshold : null;
+/** True when every cited message is known and was analyzed only for the chat's linked tasks. */
+function onlyLinkedEvidence(evidenceIds: readonly string[], ctx: PolicyContext): boolean {
+  if (evidenceIds.length === 0) return false;
+  const byId = new Map(ctx.evidenceMessages.map((message) => [message.id, message]));
+  return evidenceIds.every((id) => byId.get(id)?.linkedOnly === true);
 }
 
 /** True only when every cited message is known and was written by the owner. */
@@ -88,16 +94,30 @@ export function allEvidenceFromOwner(evidenceIds: readonly string[], evidence: r
   return evidenceIds.every((id) => byId.get(id)?.fromOwner === true);
 }
 
-function isPendingCreate(id: string, ctx: PolicyContext): boolean {
-  return (ctx.pendingCreates ?? []).some((pending) => pending.id === id && pending.chatId === ctx.chat.id);
+/** "own": only the chat the task came from. "linked": also a chat the task is linked to. */
+type Reach = "own" | "linked";
+
+const reaches = (chatId: string, owner: string | null, linked: readonly string[] | undefined, reach: Reach) =>
+  owner === chatId || (reach === "linked" && (linked ?? []).includes(chatId));
+
+function isPendingCreate(id: string, ctx: PolicyContext, reach: Reach): boolean {
+  return (ctx.pendingCreates ?? []).some((pending) => pending.id === id && reaches(ctx.chat.id, pending.chatId, pending.linkedChatIds, reach));
+}
+
+/** True when the task (or pending create) belongs to another chat and is linked to this one. */
+function isLinkedHere(id: string, ctx: PolicyContext): boolean {
+  const task = ctx.tasks.find((candidate) => candidate.id === id);
+  if (task) return task.chatId !== ctx.chat.id && (task.linkedChatIds ?? []).includes(ctx.chat.id);
+  const pending = (ctx.pendingCreates ?? []).find((candidate) => candidate.id === id);
+  return Boolean(pending && pending.chatId !== ctx.chat.id && (pending.linkedChatIds ?? []).includes(ctx.chat.id));
 }
 
 type ExistingTaskCheck = { ok: true } | { ok: false; result: PolicyResult };
 
-function checkExistingTask(taskId: string, ctx: PolicyContext): ExistingTaskCheck {
+function checkExistingTask(taskId: string, ctx: PolicyContext, reach: Reach = "own"): ExistingTaskCheck {
   const task = ctx.tasks.find((candidate) => candidate.id === taskId);
-  // A task from another chat is treated as unknown: a chat can only change its own tasks.
-  if (!task || task.chatId !== ctx.chat.id) return { ok: false, result: drop("unknown_task") };
+  // A task from another chat is treated as unknown unless it is linked to this chat (complete and cancel only).
+  if (!task || !reaches(ctx.chat.id, task.chatId, task.linkedChatIds, reach)) return { ok: false, result: drop("unknown_task") };
   if (task.status !== "open") return { ok: false, result: drop("task_not_open") };
   return { ok: true };
 }
@@ -111,40 +131,44 @@ const CHANGE_REVIEW_TYPE = {
 /**
  * The deterministic action policy (docs/ARCHITECTURE.md, "Action policy"; docs/SPEC.md, "Lifecycle").
  *
- * - create: Review during the trial, when auto-create is off for the chat, when the active model/prompt
- *   profile has no usable calibration yet (even after the trial), below max(automatic-change threshold,
- *   calibrated threshold), or when the model reported any ambiguity; otherwise applied. A create whose
- *   own burst already shows it handled (alreadyHandled) always goes to Review (already_handled).
+ * - create: Review during the trial, when auto-create is off for the chat, below the automatic-change
+ *   threshold, or when the model reported any ambiguity; otherwise applied. A create whose own burst
+ *   already shows it handled (alreadyHandled) passes the same gates and is then applied straight into
+ *   Done or Cancelled (already_handled), so it is on record without asking the owner.
  * - complete / cancel / reschedule: dropped when the task is unknown, belongs to another chat, or is not
- *   open. Applied only when every evidence message is the owner's, the action is unambiguous, and its
+ *   open. A task linked to this chat (TaskLink) counts as this chat's for complete and cancel only. Applied only when every evidence message is the owner's, the action is unambiguous, and its
  *   confidence reaches the automatic-change threshold; anyone else's evidence becomes a Possibly done /
- *   Possibly cancelled / reschedule prompt. The trial and calibration do not gate these.
+ *   Possibly cancelled / reschedule prompt. The trial does not gate these.
  * - complete / cancel / reschedule of a create still pending in Review (same chat): always goes to that
  *   pending item (pending_create) — a "may already be handled" hint or a new due — never applied.
  * - merge: always Review (dropped when a referenced task is unknown or closed).
+ * - Evidence made only of messages analyzed because the group has linked tasks (linkedOnly): only a
+ *   complete or cancel of a task linked to this chat may follow; anything else is dropped (linked_only).
  */
 export function decideAction(action: TaskAction, ctx: PolicyContext): PolicyResult {
   if (ctx.chat.mode === "off") return drop("chat_not_analyzed");
   const threshold = autoConfidenceThreshold(ctx);
+  if (onlyLinkedEvidence(action.evidenceMessageIds, ctx)) {
+    const closesLinked = (action.type === "complete" || action.type === "cancel") && isLinkedHere(action.taskId, ctx);
+    if (!closesLinked) return drop("linked_only");
+  }
 
   switch (action.type) {
     case "create": {
-      // The burst already shows it done or no longer needed: the owner decides, whatever the calibration.
-      if (action.alreadyHandled) return review("already_handled", "create");
       if (isInTrial(ctx.settings, ctx.now)) return review("trial_period", "create");
       if (!ctx.chat.autoCreate) return review("auto_create_disabled", "create");
-      const calibrated = usableCalibration(ctx);
-      if (calibrated === null) return review("calibration_required", "create");
-      // The calibrated threshold is a floor: neither the global setting nor a lenient chat can go below it.
-      if (action.confidence < Math.max(threshold, calibrated)) return review("below_threshold", "create");
+      if (action.confidence < threshold) return review("below_threshold", "create");
       if (action.ambiguityReasons.length > 0) return review("ambiguous", "create");
-      return apply("auto_create");
+      // The burst already shows it done or no longer needed: recorded as closed, nothing to review.
+      return apply(action.alreadyHandled ? "already_handled" : "auto_create");
     }
     case "complete":
     case "cancel":
     case "reschedule": {
-      if (isPendingCreate(action.taskId, ctx)) return review("pending_create", "create");
-      const check = checkExistingTask(action.taskId, ctx);
+      // Linked chats may close a task (or mark a pending create handled); only its own chat moves its due.
+      const reach: Reach = action.type === "reschedule" ? "own" : "linked";
+      if (isPendingCreate(action.taskId, ctx, reach)) return review("pending_create", "create");
+      const check = checkExistingTask(action.taskId, ctx, reach);
       if (!check.ok) return check.result;
       const reviewType = CHANGE_REVIEW_TYPE[action.type];
       if (!allEvidenceFromOwner(action.evidenceMessageIds, ctx.evidenceMessages)) {
@@ -164,6 +188,9 @@ export function decideAction(action: TaskAction, ctx: PolicyContext): PolicyResu
       }
       return review("merge_requires_review", "merge");
     }
+    case "link":
+      // Written by the task service, never by the model: always the owner's to confirm.
+      return review("link_confirmation", "link");
   }
 }
 

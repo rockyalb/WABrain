@@ -138,6 +138,8 @@ export interface ParsedAnalysisPrompt {
   openTasks: Array<{ id: string; kind: string; title: string; due: string | null }>;
   /** Creates still pending in Review (ids are review item ids). */
   pendingTasks: Array<{ id: string; kind: string; title: string; due: string | null }>;
+  /** Tasks of other chats linked to this one. */
+  linkedTasks: Array<{ id: string; kind: string; title: string; due: string | null; fromChat: string | null; pending: boolean }>;
   /** Messages marked isNew, oldest first. */
   newMessages: Array<{ id: string; from: "owner" | "contact"; text: string; derived: { type: string; text: string } | null }>;
   calendar: { today: string; tomorrow: string };
@@ -149,11 +151,18 @@ export function parseAnalysisPrompt(text: string): ParsedAnalysisPrompt {
   const trusted = JSON.parse(lines.find((line) => line.startsWith('{"now"'))!) as {
     openTasks: ParsedAnalysisPrompt["openTasks"];
     pendingTasks?: ParsedAnalysisPrompt["pendingTasks"];
+    linkedTasks?: ParsedAnalysisPrompt["linkedTasks"];
     calendar: ParsedAnalysisPrompt["calendar"];
   };
   const newMessages = lines
     .filter((line) => line.startsWith('{"id"'))
     .map((line) => JSON.parse(line) as ParsedAnalysisPrompt["newMessages"][number] & { isNew: boolean })
     .filter((message) => message.isNew);
-  return { openTasks: trusted.openTasks, pendingTasks: trusted.pendingTasks ?? [], newMessages, calendar: trusted.calendar };
+  return {
+    openTasks: trusted.openTasks,
+    pendingTasks: trusted.pendingTasks ?? [],
+    linkedTasks: trusted.linkedTasks ?? [],
+    newMessages,
+    calendar: trusted.calendar,
+  };
 }

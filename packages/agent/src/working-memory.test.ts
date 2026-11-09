@@ -32,7 +32,7 @@ const input: WorkingMemoryInput = {
     { id: "m2", at: "2026-09-23T08:03:00Z", fromOwner: true, senderName: "Alex", text: "" , kind: "voice", derivedText: "will look at it today", derivedKind: "transcript" },
   ],
   preceding: [
-    { id: "p2", at: 1790150400, fromOwner: false, text: "pershendetje" },
+    { id: "p2", at: 1790150400, fromOwner: false, text: "hello there" },
     { id: "p1", at: "2026-09-22T10:00:00Z", fromOwner: true, text: "Hello, how are you?" },
     { id: "m3", at: "2026-09-23T08:04:00Z", fromOwner: false, text: "duplicate of a burst message" },
   ],

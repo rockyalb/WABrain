@@ -25,6 +25,10 @@ data class TaskEntity(
     val createdAt: Long,
     val updatedAt: Long,
     val closedAt: Long?,
+    /** JSON array of TaskLinkDto: other chats this task involves. */
+    val linksJson: String = "[]",
+    val closedBy: String? = null,
+    val createdBy: String? = null,
 )
 
 /** Pending review item. The full action is kept as JSON. */

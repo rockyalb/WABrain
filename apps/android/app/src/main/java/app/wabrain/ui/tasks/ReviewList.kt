@@ -23,6 +23,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -35,13 +36,19 @@ import app.wabrain.R
 import app.wabrain.data.api.ReviewHandledDto
 import app.wabrain.data.api.ReviewItemType
 import app.wabrain.data.api.TaskActionDto
+import app.wabrain.data.api.TaskLinkDto
+import app.wabrain.data.db.links
 import app.wabrain.data.db.handled
 import app.wabrain.data.db.reviewType
 import app.wabrain.domain.DueFormatter
 import app.wabrain.domain.Instants
+import app.wabrain.domain.LinkInput
+import app.wabrain.domain.TaskLinks
+import app.wabrain.domain.TaskSource
 import app.wabrain.ui.common.Badge
 import app.wabrain.ui.common.BadgeRow
 import app.wabrain.ui.common.EmptyState
+import app.wabrain.ui.common.LinkEditor
 import app.wabrain.ui.common.TaskDraft
 import app.wabrain.ui.common.TaskEditorDialog
 import kotlinx.serialization.json.JsonObject
@@ -67,6 +74,13 @@ fun ReviewList(
         return
     }
     var editing by remember { mutableStateOf<ReviewCard?>(null) }
+    // Contact changes made on a card, sent with its Accept.
+    val linkDrafts = remember { mutableStateMapOf<String, List<LinkInput>>() }
+    val decide = { id: String, accept: Boolean, edits: JsonObject? ->
+        val links = linkDrafts.remove(id)
+        val withLinks = if (accept && links != null) JsonObject((edits ?: JsonObject(emptyMap())) + ("links" to TaskLinks.toJson(links))) else edits
+        onDecide(id, accept, withLinks)
+    }
     val listState = rememberLazyListState()
     val targetIndex = cards.indexOfFirst { it.item.id == targetItemId }
     val targetNoticeBeforeCards = targetState is ReviewTargetState.Loading ||
@@ -115,12 +129,14 @@ fun ReviewList(
                 card,
                 state,
                 formatter,
-                onDecide,
+                decide,
                 onAcceptClosed,
                 onEdit = { editing = card },
                 onOpenTask,
                 onOpenConversation,
                 highlighted = card.item.id == targetItemId,
+                linkDraft = linkDrafts[card.item.id],
+                onLinksChange = { linkDrafts[card.item.id] = it },
             )
         }
     }
@@ -142,7 +158,7 @@ fun ReviewList(
             people = state.people,
             showLink = false,
             confirmLabel = stringResource(R.string.action_accept),
-            onConfirm = { draft -> onDecide(card.item.id, true, editsFor(create, draft, state)) },
+            onConfirm = { draft -> decide(card.item.id, true, editsFor(create, draft, state)) },
             onDismiss = { editing = null },
         )
     }
@@ -179,9 +195,24 @@ private fun ReviewCardView(
     onOpenTask: (String) -> Unit,
     onOpenConversation: (String, String?) -> Unit,
     highlighted: Boolean = false,
+    linkDraft: List<LinkInput>? = null,
+    onLinksChange: (List<LinkInput>) -> Unit = {},
 ) {
     val type = card.item.reviewType
     val action = card.action
+    // The contacts a new task (or a task created on its own) involves, with the owner's unsaved changes.
+    val proposedLinks: List<TaskLinkDto>? = when (action) {
+        is TaskActionDto.Create -> action.links
+        is TaskActionDto.Link -> card.task?.links ?: action.links
+        else -> null
+    }
+    val shownLinks = proposedLinks?.let { original ->
+        val chatsById = state.chats.associateBy { it.id }
+        val peopleById = state.people.associateBy { it.id }
+        val ownChatId = card.task?.chatId ?: card.item.chatId
+        linkDraft?.let { TaskLinks.apply(original, it, ownChatId) { id -> TaskSource.chatName(id, chatsById, peopleById) } } ?: original
+    }
+    val needsPick = type == ReviewItemType.LINK && shownLinks.orEmpty().any { it.chatId == null }
     // A later message suggests this proposal was already dealt with before it was reviewed.
     val handled = if (type == ReviewItemType.CREATE) card.item.handled else null
     val borderColor by animateColorAsState(
@@ -195,11 +226,11 @@ private fun ReviewCardView(
     ) {
         Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             BadgeRow {
-                Badge(stringResource(reviewTypeLabel(type)))
+                Badge(stringResource(if (needsPick) R.string.review_type_link_pick else reviewTypeLabel(type)))
                 action?.let { Badge(stringResource(R.string.confidence_percent, (it.confidence * 100).roundToInt())) }
                 card.chatName?.let { Text(it, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant) }
             }
-            Text(card.item.summary, style = MaterialTheme.typography.bodyLarge)
+            if (type != ReviewItemType.LINK) Text(card.item.summary, style = MaterialTheme.typography.bodyLarge)
             when (action) {
                 is TaskActionDto.Create -> {
                     Text(action.title, style = MaterialTheme.typography.titleMedium)
@@ -207,11 +238,18 @@ private fun ReviewCardView(
                         Text(stringResource(R.string.review_due, formatter.formatDue(Instants.parseMillis(it), action.dueHasTime, Instant.now())))
                     }
                 }
+                is TaskActionDto.Link -> {
+                    Text(card.task?.title ?: card.item.summary, style = MaterialTheme.typography.titleMedium)
+                    Text(stringResource(R.string.review_link_explainer), style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 is TaskActionDto.Reschedule -> Text(
                     stringResource(R.string.review_new_due, formatter.formatDue(Instants.parseMillis(action.dueAt), action.dueHasTime, Instant.now())),
                 )
                 is TaskActionDto.Merge -> Text(stringResource(R.string.review_merge_count, action.taskIds.size))
                 else -> Unit
+            }
+            shownLinks?.let { links ->
+                LinkEditor(links, card.task?.chatId ?: card.item.chatId, state.chats, state.people, onChange = onLinksChange)
             }
             card.task?.let { task ->
                 TextButton(onClick = { onOpenTask(task.id) }) { Text(stringResource(R.string.review_task_link, task.title)) }
@@ -240,6 +278,9 @@ private fun ReviewCardView(
                     }
                     OutlinedButton(onClick = { onDecide(card.item.id, true, null) }) { Text(stringResource(R.string.action_keep_open)) }
                     TextButton(onClick = { onDecide(card.item.id, false, null) }) { Text(stringResource(R.string.action_reject)) }
+                } else if (type == ReviewItemType.LINK) {
+                    Button(onClick = { onDecide(card.item.id, true, null) }) { Text(stringResource(R.string.action_accept)) }
+                    OutlinedButton(onClick = { onDecide(card.item.id, false, null) }) { Text(stringResource(R.string.action_remove)) }
                 } else if (type.isConfirmation) {
                     Button(onClick = { onDecide(card.item.id, true, null) }) { Text(stringResource(R.string.action_done)) }
                     OutlinedButton(onClick = { onDecide(card.item.id, false, null) }) { Text(stringResource(R.string.action_not_yet)) }
@@ -313,5 +354,6 @@ fun reviewTypeLabel(type: ReviewItemType): Int = when (type) {
     ReviewItemType.POSSIBLY_CANCELLED -> R.string.review_type_possibly_cancelled
     ReviewItemType.RESCHEDULE -> R.string.review_type_reschedule
     ReviewItemType.MERGE -> R.string.review_type_merge
+    ReviewItemType.LINK -> R.string.review_type_link
     ReviewItemType.UNKNOWN -> R.string.review_type_unknown
 }

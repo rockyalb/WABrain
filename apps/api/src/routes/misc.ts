@@ -3,9 +3,7 @@ import {
   createContext,
   deleteContext,
   deletePushEndpoint,
-  getAutoCreateStatus,
   getSettings,
-  isTrialActive,
   isValidTimeZone,
   listContexts,
   listDeviceNotifications,
@@ -77,15 +75,7 @@ export function miscRoutes(deps: AppDeps) {
     return c.body(null, 204);
   });
 
-  // Settings plus why creates are (not) automatic yet: trial, calibrating the current model/prompt, or active.
-  app.get("/settings", async (c) => {
-    const settings = await getSettings(database.db);
-    const autoCreate = await getAutoCreateStatus(database.db, {
-      inTrial: isTrialActive(settings, deps.now()),
-      autoCreateThreshold: settings.autoCreateThreshold,
-    });
-    return c.json({ ...settings, autoCreate });
-  });
+  app.get("/settings", async (c) => c.json(await getSettings(database.db)));
 
   app.patch("/settings", async (c) => {
     const patch = await jsonBody(c, UpdateSettingsRequestSchema);

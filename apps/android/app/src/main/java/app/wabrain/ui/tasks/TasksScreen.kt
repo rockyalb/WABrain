@@ -25,6 +25,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -34,6 +36,7 @@ import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.SnackbarResult
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
@@ -71,16 +74,19 @@ import app.wabrain.data.db.ChatEntity
 import app.wabrain.data.db.ContextEntity
 import app.wabrain.data.db.PersonEntity
 import app.wabrain.data.db.TaskEntity
+import app.wabrain.domain.ComboFilter
 import app.wabrain.domain.DueBucket
 import app.wabrain.domain.DueFormatter
 import app.wabrain.domain.TaskGrouping
 import app.wabrain.domain.TaskSource
+import app.wabrain.domain.TaskSort
 import app.wabrain.notify.Notifier
 import app.wabrain.ui.TaskTabs
 import app.wabrain.ui.common.ContextFilterChips
 import app.wabrain.ui.common.EmptyState
 import app.wabrain.ui.common.ErrorBanner
 import app.wabrain.ui.common.LoadingBox
+import app.wabrain.ui.common.SearchableDropdown
 import app.wabrain.ui.common.TaskDraft
 import app.wabrain.ui.common.TaskEditorDialog
 import app.wabrain.ui.common.errorText
@@ -130,6 +136,9 @@ fun TasksScreen(
         }
     }
 
+    // Coming back from a task's detail screen: it may have been reopened or closed there.
+    LaunchedEffect(Unit) { vm.reloadClosedSearch() }
+
     val today = remember(state.now, state.zone) { state.now.atZone(state.zone).toLocalDate() }
     Scaffold(
         containerColor = Color.Transparent,
@@ -153,6 +162,7 @@ fun TasksScreen(
             GlassTabs(tab = tab, reviewCount = state.review.size, onSelect = { tab = it }, modifier = Modifier.padding(horizontal = 14.dp, vertical = 6.dp))
             if (tab != TaskTabs.REVIEW) {
                 ContextFilterChips(state.contexts, state.filter, vm::setFilter, Modifier.padding(vertical = 4.dp))
+                TaskSortMenu(state.sort, vm::setSort)
             }
             error?.let {
                 ErrorBanner(errorText(it), Modifier.clickable { vm.dismissError() })
@@ -177,7 +187,16 @@ fun TasksScreen(
                         targetItemId = initialReviewItemId,
                         targetState = reviewTarget,
                     )
-                    tab == TaskTabs.CLOSED -> ClosedTaskList(state.recentlyClosed, state.chats, state.people, formatter, onOpenTask)
+                    tab == TaskTabs.CLOSED -> ClosedTaskList(
+                        recent = state.recentlyClosed,
+                        search = state.closedSearch,
+                        chats = state.chats,
+                        people = state.people,
+                        formatter = formatter,
+                        onPickContact = vm::searchClosed,
+                        onLoadMore = vm::loadMoreClosed,
+                        onOpen = onOpenTask,
+                    )
                     else -> {
                         val tasks = when (tab) {
                             TaskTabs.TODAY -> state.today
@@ -220,6 +239,37 @@ fun TasksScreen(
     LaunchedEffect(initialReviewItemId) {
         initialReviewItemId?.let(vm::resolveReviewTarget)
     }
+}
+
+@Composable
+private fun TaskSortMenu(selected: TaskSort, onSelect: (TaskSort) -> Unit) {
+    var expanded by remember { mutableStateOf(false) }
+    val label = stringResource(selected.labelResource())
+    Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp), horizontalArrangement = Arrangement.End) {
+        Box {
+            TextButton(onClick = { expanded = true }) {
+                Text(stringResource(R.string.task_sort_by, label), maxLines = 1, overflow = TextOverflow.Ellipsis)
+            }
+            DropdownMenu(expanded = expanded, onDismissRequest = { expanded = false }) {
+                TaskSort.entries.forEach { order ->
+                    DropdownMenuItem(
+                        text = { Text(stringResource(order.labelResource()), fontWeight = if (order == selected) FontWeight.Bold else FontWeight.Normal) },
+                        onClick = { expanded = false; onSelect(order) },
+                    )
+                }
+            }
+        }
+    }
+}
+
+private fun TaskSort.labelResource(): Int = when (this) {
+    TaskSort.DEFAULT -> R.string.task_sort_default
+    TaskSort.DUE_ASC -> R.string.task_sort_due_asc
+    TaskSort.DUE_DESC -> R.string.task_sort_due_desc
+    TaskSort.CREATED_DESC -> R.string.task_sort_created_desc
+    TaskSort.CREATED_ASC -> R.string.task_sort_created_asc
+    TaskSort.UPDATED_DESC -> R.string.task_sort_updated_desc
+    TaskSort.UPDATED_ASC -> R.string.task_sort_updated_asc
 }
 
 /** Logo, title, date and a ring of tasks completed today against tasks created today. */
@@ -414,6 +464,7 @@ private fun TaskList(
                     overdue = overdue,
                     contextName = context?.name,
                     contextColor = context?.color,
+                    createdByAi = task.createdBy == "ai",
                 ),
                 completeLabel = stringResource(R.string.task_complete_label, task.title),
                 onOpen = { onOpen(task.id) },
@@ -425,44 +476,79 @@ private fun TaskList(
 }
 
 /**
- * Recently closed tab: completed and cancelled tasks, including automatic
- * changes, each opening its detail screen where history and Undo live.
+ * Closed tab: completed and cancelled tasks of the last 7 days, including
+ * automatic changes, or with a contact picked every closed task for them
+ * (fetched from the server, a page at a time). Each opens its detail screen,
+ * where history and Undo live.
  */
 @Composable
 private fun ClosedTaskList(
-    tasks: List<TaskEntity>,
+    recent: List<TaskEntity>,
+    search: ClosedSearch,
     chats: List<ChatEntity>,
     people: List<PersonEntity>,
     formatter: DueFormatter,
+    onPickContact: (String?) -> Unit,
+    onLoadMore: () -> Unit,
     onOpen: (String) -> Unit,
 ) {
     val chatsById = remember(chats) { chats.associateBy { it.id } }
     val peopleById = remember(people) { people.associateBy { it.id } }
+    val contactOptions = remember(people, chats) { ComboFilter.people(people, chats) }
+    val searching = search.personId != null
+    val tasks = if (searching) search.tasks else recent
     LazyColumn(
         Modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 14.dp, end = 14.dp, top = 2.dp, bottom = 100.dp),
         verticalArrangement = Arrangement.spacedBy(10.dp),
     ) {
+        item(key = "closed-contact") {
+            SearchableDropdown(
+                label = stringResource(R.string.closed_contact),
+                options = contactOptions,
+                selected = search.personId,
+                onSelect = onPickContact,
+                emptyLabel = stringResource(R.string.closed_contact_all),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 4.dp),
+            )
+        }
         item(key = "closed-hint") {
             Text(
-                stringResource(R.string.recently_closed_hint),
+                stringResource(if (searching) R.string.closed_contact_hint else R.string.recently_closed_hint),
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp),
             )
         }
+        if (searching && search.failed) {
+            item(key = "closed-error") { ErrorBanner(stringResource(R.string.closed_contact_error)) }
+        }
         if (tasks.isEmpty()) {
-            item(key = "closed-empty") { EmptyState(stringResource(R.string.empty_recently_closed)) }
+            item(key = "closed-empty") {
+                when {
+                    searching && search.loading -> LoadingBox(Modifier.fillMaxWidth().height(160.dp))
+                    searching && search.failed -> Unit
+                    else -> EmptyState(stringResource(if (searching) R.string.closed_contact_empty else R.string.empty_recently_closed))
+                }
+            }
         }
         items(tasks, key = { it.id }) { task ->
             GlassClosedCard(
                 title = task.title,
                 source = TaskSource.of(task, chatsById, peopleById),
                 closedText = formatter.formatInstant(task.closedAt ?: task.updatedAt),
+                closedByAi = task.closedBy == "ai",
                 status = stringResource(if (task.status == "done") R.string.status_done else R.string.status_cancelled),
                 onOpen = { onOpen(task.id) },
                 modifier = Modifier.animateItem(),
             )
+        }
+        if (searching && search.nextCursor != null) {
+            item(key = "closed-more") {
+                Box(Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    TextButton(onClick = onLoadMore, enabled = !search.loading) { Text(stringResource(R.string.closed_load_more)) }
+                }
+            }
         }
     }
 }

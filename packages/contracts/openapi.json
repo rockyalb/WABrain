@@ -777,6 +777,22 @@
               "minLength": 1,
               "maxLength": 200
             }
+          },
+          {
+            "in": "query",
+            "name": "sort",
+            "schema": {
+              "type": "string",
+              "enum": [
+                "default",
+                "due_asc",
+                "due_desc",
+                "created_desc",
+                "created_asc",
+                "updated_desc",
+                "updated_asc"
+              ]
+            }
           }
         ],
         "responses": {
@@ -1211,6 +1227,41 @@
                       "todo",
                       "waiting_on"
                     ]
+                  },
+                  "links": {
+                    "maxItems": 5,
+                    "type": "array",
+                    "items": {
+                      "type": "object",
+                      "properties": {
+                        "name": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "maxLength": 80
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        },
+                        "chatId": {
+                          "anyOf": [
+                            {
+                              "type": "string",
+                              "minLength": 1,
+                              "maxLength": 200
+                            },
+                            {
+                              "type": "null"
+                            }
+                          ]
+                        }
+                      },
+                      "required": [
+                        "chatId"
+                      ]
+                    }
                   }
                 }
               }
@@ -1939,6 +1990,41 @@
                           "todo",
                           "waiting_on"
                         ]
+                      },
+                      "links": {
+                        "maxItems": 5,
+                        "type": "array",
+                        "items": {
+                          "type": "object",
+                          "properties": {
+                            "name": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "maxLength": 80
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            },
+                            "chatId": {
+                              "anyOf": [
+                                {
+                                  "type": "string",
+                                  "minLength": 1,
+                                  "maxLength": 200
+                                },
+                                {
+                                  "type": "null"
+                                }
+                              ]
+                            }
+                          },
+                          "required": [
+                            "chatId"
+                          ]
+                        }
                       }
                     }
                   },
@@ -2865,6 +2951,10 @@
                         "type": "null"
                       }
                     ]
+                  },
+                  "contextConfirmed": {
+                    "type": "boolean",
+                    "const": true
                   }
                 }
               }
@@ -3849,7 +3939,7 @@
     },
     "/v1/settings": {
       "get": {
-        "summary": "Settings, with the read-only auto-create status",
+        "summary": "Settings",
         "security": [
           {
             "deviceToken": []
@@ -3862,232 +3952,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "timezone": {
-                      "type": "string",
-                      "minLength": 1
-                    },
-                    "endOfWorkDay": {
-                      "type": "string",
-                      "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
-                    },
-                    "dailySummaryTime": {
-                      "anyOf": [
-                        {
-                          "type": "string",
-                          "pattern": "^([01]\\d|2[0-3]):[0-5]\\d$"
-                        },
-                        {
-                          "type": "null"
-                        }
-                      ]
-                    },
-                    "remindersEnabled": {
-                      "type": "boolean"
-                    },
-                    "reminderLeadMinutes": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 10080
-                    },
-                    "trialStartedAt": {
-                      "type": "string",
-                      "format": "date-time",
-                      "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                    },
-                    "trialDays": {
-                      "type": "integer",
-                      "minimum": 0,
-                      "maximum": 90
-                    },
-                    "autoCreateThreshold": {
-                      "type": "number",
-                      "minimum": 0,
-                      "maximum": 1
-                    },
-                    "autoCreate": {
-                      "type": "object",
-                      "properties": {
-                        "state": {
-                          "type": "string",
-                          "enum": [
-                            "trial",
-                            "calibrating",
-                            "active"
-                          ]
-                        },
-                        "profile": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "provider": {
-                                  "type": "string"
-                                },
-                                "model": {
-                                  "type": "string"
-                                },
-                                "promptVersion": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "provider",
-                                "model",
-                                "promptVersion"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "calibration": {
-                          "type": "object",
-                          "properties": {
-                            "ready": {
-                              "type": "boolean"
-                            },
-                            "reason": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "enum": [
-                                    "insufficient_labels",
-                                    "no_reliable_threshold"
-                                  ]
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "threshold": {
-                              "anyOf": [
-                                {
-                                  "type": "number",
-                                  "minimum": 0,
-                                  "maximum": 1
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "effectiveThreshold": {
-                              "anyOf": [
-                                {
-                                  "type": "number",
-                                  "minimum": 0,
-                                  "maximum": 1
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "decisions": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "accepted": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "rejected": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "calibratedAt": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            }
-                          },
-                          "required": [
-                            "ready",
-                            "reason",
-                            "threshold",
-                            "effectiveThreshold",
-                            "decisions",
-                            "accepted",
-                            "rejected",
-                            "calibratedAt"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "required": {
-                          "type": "object",
-                          "properties": {
-                            "decisions": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "accepted": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "rejected": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "uneditedAcceptedAtThreshold": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "precision": {
-                              "type": "number",
-                              "minimum": 0,
-                              "maximum": 1
-                            }
-                          },
-                          "required": [
-                            "decisions",
-                            "accepted",
-                            "rejected",
-                            "uneditedAcceptedAtThreshold",
-                            "precision"
-                          ],
-                          "additionalProperties": false
-                        }
-                      },
-                      "required": [
-                        "state",
-                        "profile",
-                        "calibration",
-                        "required"
-                      ],
-                      "additionalProperties": false
-                    }
-                  },
-                  "required": [
-                    "timezone",
-                    "endOfWorkDay",
-                    "dailySummaryTime",
-                    "remindersEnabled",
-                    "reminderLeadMinutes",
-                    "trialStartedAt",
-                    "trialDays",
-                    "autoCreateThreshold",
-                    "autoCreate"
-                  ],
-                  "additionalProperties": false
+                  "$ref": "#/components/schemas/Settings"
                 }
               }
             }
@@ -4194,6 +4059,11 @@
                     "type": "integer",
                     "minimum": 0,
                     "maximum": 10080
+                  },
+                  "autoCreateThreshold": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 1
                   }
                 }
               }
@@ -4649,6 +4519,67 @@
                                 "evidenceMessageIds"
                               ],
                               "additionalProperties": false
+                            },
+                            "links": {
+                              "maxItems": 5,
+                              "type": "array",
+                              "items": {
+                                "type": "object",
+                                "properties": {
+                                  "name": {
+                                    "type": "string",
+                                    "minLength": 1,
+                                    "maxLength": 80
+                                  },
+                                  "chatId": {
+                                    "anyOf": [
+                                      {
+                                        "type": "string",
+                                        "minLength": 1
+                                      },
+                                      {
+                                        "type": "null"
+                                      }
+                                    ]
+                                  },
+                                  "candidates": {
+                                    "default": [],
+                                    "maxItems": 5,
+                                    "type": "array",
+                                    "items": {
+                                      "type": "object",
+                                      "properties": {
+                                        "chatId": {
+                                          "type": "string",
+                                          "minLength": 1
+                                        },
+                                        "name": {
+                                          "type": "string"
+                                        }
+                                      },
+                                      "required": [
+                                        "chatId",
+                                        "name"
+                                      ],
+                                      "additionalProperties": false
+                                    }
+                                  },
+                                  "source": {
+                                    "type": "string",
+                                    "enum": [
+                                      "ai",
+                                      "owner"
+                                    ]
+                                  }
+                                },
+                                "required": [
+                                  "name",
+                                  "chatId",
+                                  "candidates",
+                                  "source"
+                                ],
+                                "additionalProperties": false
+                              }
                             },
                             "confidence": {
                               "type": "number",
@@ -5152,172 +5083,23 @@
                       ],
                       "additionalProperties": false
                     },
-                    "autoCreate": {
+                    "policy": {
                       "type": "object",
                       "properties": {
-                        "state": {
-                          "type": "string",
-                          "enum": [
-                            "trial",
-                            "calibrating",
-                            "active"
-                          ]
+                        "trialDays": {
+                          "type": "integer",
+                          "minimum": -9007199254740991,
+                          "maximum": 9007199254740991
                         },
-                        "profile": {
-                          "anyOf": [
-                            {
-                              "type": "object",
-                              "properties": {
-                                "provider": {
-                                  "type": "string"
-                                },
-                                "model": {
-                                  "type": "string"
-                                },
-                                "promptVersion": {
-                                  "type": "string"
-                                }
-                              },
-                              "required": [
-                                "provider",
-                                "model",
-                                "promptVersion"
-                              ],
-                              "additionalProperties": false
-                            },
-                            {
-                              "type": "null"
-                            }
-                          ]
-                        },
-                        "calibration": {
-                          "type": "object",
-                          "properties": {
-                            "ready": {
-                              "type": "boolean"
-                            },
-                            "reason": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "enum": [
-                                    "insufficient_labels",
-                                    "no_reliable_threshold"
-                                  ]
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "threshold": {
-                              "anyOf": [
-                                {
-                                  "type": "number",
-                                  "minimum": 0,
-                                  "maximum": 1
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "effectiveThreshold": {
-                              "anyOf": [
-                                {
-                                  "type": "number",
-                                  "minimum": 0,
-                                  "maximum": 1
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            },
-                            "decisions": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "accepted": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "rejected": {
-                              "type": "integer",
-                              "minimum": 0,
-                              "maximum": 9007199254740991
-                            },
-                            "calibratedAt": {
-                              "anyOf": [
-                                {
-                                  "type": "string",
-                                  "format": "date-time",
-                                  "pattern": "^(?:(?:\\d\\d[2468][048]|\\d\\d[13579][26]|\\d\\d0[48]|[02468][048]00|[13579][26]00)-02-29|\\d{4}-(?:(?:0[13578]|1[02])-(?:0[1-9]|[12]\\d|3[01])|(?:0[469]|11)-(?:0[1-9]|[12]\\d|30)|(?:02)-(?:0[1-9]|1\\d|2[0-8])))T(?:(?:[01]\\d|2[0-3]):[0-5]\\d:[0-5]\\d(?:\\.\\d+)?(?:Z|([+-](?:[01]\\d|2[0-3]):[0-5]\\d)))$"
-                                },
-                                {
-                                  "type": "null"
-                                }
-                              ]
-                            }
-                          },
-                          "required": [
-                            "ready",
-                            "reason",
-                            "threshold",
-                            "effectiveThreshold",
-                            "decisions",
-                            "accepted",
-                            "rejected",
-                            "calibratedAt"
-                          ],
-                          "additionalProperties": false
-                        },
-                        "required": {
-                          "type": "object",
-                          "properties": {
-                            "decisions": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "accepted": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "rejected": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "uneditedAcceptedAtThreshold": {
-                              "type": "integer",
-                              "minimum": -9007199254740991,
-                              "maximum": 9007199254740991
-                            },
-                            "precision": {
-                              "type": "number",
-                              "minimum": 0,
-                              "maximum": 1
-                            }
-                          },
-                          "required": [
-                            "decisions",
-                            "accepted",
-                            "rejected",
-                            "uneditedAcceptedAtThreshold",
-                            "precision"
-                          ],
-                          "additionalProperties": false
+                        "autoCreateThreshold": {
+                          "type": "number",
+                          "minimum": 0,
+                          "maximum": 1
                         }
                       },
                       "required": [
-                        "state",
-                        "profile",
-                        "calibration",
-                        "required"
+                        "trialDays",
+                        "autoCreateThreshold"
                       ],
                       "additionalProperties": false
                     },
@@ -5342,7 +5124,7 @@
                     "openwa",
                     "providers",
                     "trial",
-                    "autoCreate",
+                    "policy",
                     "devices"
                   ],
                   "additionalProperties": false
@@ -7831,6 +7613,67 @@
               }
             ]
           },
+          "links": {
+            "default": [],
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 80
+                },
+                "chatId": {
+                  "anyOf": [
+                    {
+                      "type": "string",
+                      "minLength": 1
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "candidates": {
+                  "default": [],
+                  "maxItems": 5,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "chatId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "name": {
+                        "type": "string"
+                      }
+                    },
+                    "required": [
+                      "chatId",
+                      "name"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "source": {
+                  "type": "string",
+                  "enum": [
+                    "ai",
+                    "owner"
+                  ]
+                }
+              },
+              "required": [
+                "name",
+                "chatId",
+                "candidates",
+                "source"
+              ],
+              "additionalProperties": false
+            }
+          },
           "origin": {
             "type": "string",
             "enum": [
@@ -7885,6 +7728,36 @@
                 "type": "null"
               }
             ]
+          },
+          "closedBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ai",
+                  "owner",
+                  "system"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "createdBy": {
+            "anyOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "ai",
+                  "owner",
+                  "system"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -7898,6 +7771,7 @@
           "contextId",
           "chatId",
           "personId",
+          "links",
           "origin",
           "language",
           "confidence",
@@ -8046,7 +7920,8 @@
               "possibly_done",
               "possibly_cancelled",
               "reschedule",
-              "merge"
+              "merge",
+              "link"
             ]
           },
           "state": {
@@ -8089,7 +7964,9 @@
               "history_import",
               "conflicting_actions",
               "pending_create",
-              "already_handled"
+              "already_handled",
+              "linked_only",
+              "link_confirmation"
             ]
           },
           "chatId": {
@@ -8285,6 +8162,67 @@
                   "evidenceMessageIds"
                 ],
                 "additionalProperties": false
+              },
+              "links": {
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "chatId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "candidates": {
+                      "default": [],
+                      "maxItems": 5,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "chatId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "chatId",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "ai",
+                        "owner"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "chatId",
+                    "candidates",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
               },
               "confidence": {
                 "type": "number",
@@ -8494,6 +8432,109 @@
               "evidenceMessageIds"
             ],
             "additionalProperties": false
+          },
+          {
+            "type": "object",
+            "properties": {
+              "type": {
+                "type": "string",
+                "const": "link"
+              },
+              "taskId": {
+                "type": "string",
+                "minLength": 1
+              },
+              "links": {
+                "minItems": 1,
+                "maxItems": 5,
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "properties": {
+                    "name": {
+                      "type": "string",
+                      "minLength": 1,
+                      "maxLength": 80
+                    },
+                    "chatId": {
+                      "anyOf": [
+                        {
+                          "type": "string",
+                          "minLength": 1
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "candidates": {
+                      "default": [],
+                      "maxItems": 5,
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "chatId": {
+                            "type": "string",
+                            "minLength": 1
+                          },
+                          "name": {
+                            "type": "string"
+                          }
+                        },
+                        "required": [
+                          "chatId",
+                          "name"
+                        ],
+                        "additionalProperties": false
+                      }
+                    },
+                    "source": {
+                      "type": "string",
+                      "enum": [
+                        "ai",
+                        "owner"
+                      ]
+                    }
+                  },
+                  "required": [
+                    "name",
+                    "chatId",
+                    "candidates",
+                    "source"
+                  ],
+                  "additionalProperties": false
+                }
+              },
+              "confidence": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 1
+              },
+              "ambiguityReasons": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              },
+              "evidenceMessageIds": {
+                "minItems": 1,
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              }
+            },
+            "required": [
+              "type",
+              "taskId",
+              "links",
+              "confidence",
+              "ambiguityReasons",
+              "evidenceMessageIds"
+            ],
+            "additionalProperties": false
           }
         ],
         "type": "object"
@@ -8672,6 +8713,10 @@
               }
             ]
           },
+          "contextConfirmed": {
+            "default": true,
+            "type": "boolean"
+          },
           "facts": {
             "type": "array",
             "items": {
@@ -8690,6 +8735,7 @@
           "jids",
           "languages",
           "defaultContextId",
+          "contextConfirmed",
           "facts",
           "updatedAt"
         ],
@@ -8928,11 +8974,22 @@
                       "possibly_done",
                       "possibly_cancelled",
                       "reschedule",
-                      "merge"
+                      "merge",
+                      "link"
                     ]
                   },
                   "title": {
                     "type": "string"
+                  },
+                  "needsPick": {
+                    "type": "boolean"
+                  },
+                  "handled": {
+                    "type": "string",
+                    "enum": [
+                      "done",
+                      "cancelled"
+                    ]
                   }
                 },
                 "required": [
@@ -8941,6 +8998,41 @@
                   "reviewItemId",
                   "reviewType",
                   "title"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "object",
+                "properties": {
+                  "type": {
+                    "type": "string",
+                    "const": "handled"
+                  },
+                  "notificationId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "taskId": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "title": {
+                    "type": "string"
+                  },
+                  "status": {
+                    "type": "string",
+                    "enum": [
+                      "done",
+                      "cancelled"
+                    ]
+                  }
+                },
+                "required": [
+                  "type",
+                  "notificationId",
+                  "taskId",
+                  "title",
+                  "status"
                 ],
                 "additionalProperties": false
               },

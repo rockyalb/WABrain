@@ -178,7 +178,7 @@ describe("profile-chat over imported history", () => {
     await addMessages(off.chatId, ["Sekret"]);
     await testDb.database.db.update(schema.chats).set({ mode: "off" }).where(eq(schema.chats.id, off.chatId));
     const group = await makeDirectChat();
-    await addMessages(group.chatId, ["Grupi"]);
+    await addMessages(group.chatId, ["Group"]);
     await testDb.database.db.update(schema.chats).set({ isGroup: true }).where(eq(schema.chats.id, group.chatId));
     expect(await requestProfileCatchUp(testDb.database.db, off.chatId)).toBe(false);
 

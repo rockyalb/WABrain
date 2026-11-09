@@ -96,8 +96,8 @@ async function addPersonChat(name: string, contextId: string, mode: "on" | "off"
   const personId = newId();
   const chatId = newId();
   const jid = `4469200${seq}@s.whatsapp.net`;
-  await h.testDb.database.db.insert(schema.people).values({ id: personId, displayName: name, primaryJid: jid });
-  await h.testDb.database.db.insert(schema.chats).values({ id: chatId, jid, isGroup: false, mode, personId, defaultContextId: contextId, name });
+  await h.testDb.database.db.insert(schema.people).values({ id: personId, displayName: name, primaryJid: jid, defaultContextId: contextId });
+  await h.testDb.database.db.insert(schema.chats).values({ id: chatId, jid, isGroup: false, mode, personId, name });
   return { personId, chatId };
 }
 

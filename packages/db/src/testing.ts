@@ -5,10 +5,9 @@
  */
 import { randomBytes } from "node:crypto";
 import postgres from "postgres";
-import { createDatabase, type Database, type Db } from "./client.js";
+import { createDatabase, type Database } from "./client.js";
 import { runMigrations } from "./migrate.js";
 import { ensureDefaults } from "./repos/settings.js";
-import { storeTaskCalibration, taskCalibrationProfile } from "./repos/task-calibration.js";
 
 export const TEST_SERVER_URL =
   process.env.TEST_DATABASE_URL ?? process.env.DATABASE_URL ?? "postgres://postgres:test@localhost:55432/postgres";
@@ -75,31 +74,4 @@ export function makeOpenWaEnvelope(
       ...overrides.data,
     },
   };
-}
-
-/**
- * Marks an analysis profile as calibrated, as if the owner had decided enough Review creates. Tests of
- * behavior "after the trial" need this: without it creates stay in Review (calibration_required).
- */
-export async function seedTaskCalibration(
-  db: Db,
-  profile: { provider: string; model: string; promptVersion: string; threshold?: number },
-): Promise<void> {
-  const profileKey = taskCalibrationProfile(profile.provider, profile.model, profile.promptVersion);
-  if (!profileKey) throw new Error("provider, model and prompt version are required");
-  await storeTaskCalibration(db, {
-    profileKey,
-    provider: profile.provider,
-    model: profile.model,
-    promptVersion: profile.promptVersion,
-    ready: true,
-    threshold: profile.threshold ?? 0.5,
-    sampleCount: 20,
-    acceptedCount: 15,
-    rejectedCount: 5,
-    uneditedAcceptedAtThresholdCount: 15,
-    precisionAtThreshold: 1,
-    reason: null,
-    calibratedAt: new Date().toISOString(),
-  });
 }

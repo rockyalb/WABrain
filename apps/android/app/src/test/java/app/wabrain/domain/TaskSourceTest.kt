@@ -2,13 +2,15 @@ package app.wabrain.domain
 
 import app.wabrain.data.db.ChatEntity
 import app.wabrain.data.db.PersonEntity
+import app.wabrain.data.api.TaskLinkDto
 import app.wabrain.data.db.TaskEntity
+import app.wabrain.data.db.encodeLinks
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
 import org.junit.Test
 
 class TaskSourceTest {
-    private fun task(chatId: String? = null, personId: String? = null) = TaskEntity(
+    private fun task(chatId: String? = null, personId: String? = null, links: List<TaskLinkDto> = emptyList()) = TaskEntity(
         id = "t",
         kind = "todo",
         status = "open",
@@ -26,6 +28,7 @@ class TaskSourceTest {
         createdAt = 0,
         updatedAt = 0,
         closedAt = null,
+        linksJson = encodeLinks(links),
     )
 
     private fun chat(id: String, name: String?, isGroup: Boolean, personId: String? = null) = ChatEntity(
@@ -80,5 +83,25 @@ class TaskSourceTest {
     @Test
     fun manualTaskHasNoSource() {
         assertNull(TaskSource.of(task(), chats, people))
+    }
+
+    @Test
+    fun linkedChatsFollowTheSourceByTheirContactName() {
+        val links = listOf(TaskLinkDto("Sam", "sam-dm"), TaskLinkDto("Robin", null), TaskLinkDto("the family group", "family"))
+        val source = TaskSource.of(task("family", "mira", links), chats, people)!!
+        assertEquals("Family · Mira", source.label)
+        assertEquals("→ Sam Carter, Family, Robin?", source.linkLabel)
+    }
+
+    @Test
+    fun aManualTaskWithALinkShowsOnlyTheLink() {
+        val source = TaskSource.of(task(links = listOf(TaskLinkDto("Jordan", "gone"))), chats, people)!!
+        assertNull(source.groupName ?: source.personName)
+        assertEquals("→ Jordan", source.linkLabel)
+    }
+
+    @Test
+    fun noLinksNoLinkLabel() {
+        assertNull(TaskSource.of(task("family"), chats, people)?.linkLabel)
     }
 }

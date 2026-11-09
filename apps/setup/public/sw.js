@@ -21,27 +21,45 @@ function reviewTarget(reviewItemId) {
   return reviewItemId ? `/#/tasks/review?item=${encodeURIComponent(reviewItemId)}` : "/#/tasks/review";
 }
 
+const HANDLED_TITLES = { done: "Saved as done", cancelled: "Saved as cancelled" };
+
 async function showPayload(payload) {
-  if (!payload || !["review", "reminder", "summary"].includes(payload.type)) return;
+  if (!payload || !["review", "reminder", "summary", "handled"].includes(payload.type)) return;
   const review = payload.type === "review";
   const confirmation = ["possibly_done", "possibly_cancelled"].includes(payload.reviewType);
+  // A create that a later message shows already handled: save it closed, or discard it.
+  const handled = review && payload.reviewType === "create" ? payload.handled : null;
   const target = review
     ? reviewTarget(payload.reviewItemId)
-    : payload.type === "reminder" ? `/#/tasks/${encodeURIComponent(payload.taskId)}` : "/#/tasks";
-  await self.registration.showNotification(
-    review ? "Review needed" : payload.type === "reminder" ? "Task reminder" : "Daily summary",
-    {
-      body: review ? "A task decision is waiting." : payload.type === "reminder" ? "A task is due soon." : "Open your task summary.",
-      icon: "/app-icon.png",
-      badge: "/app-icon.png",
-      tag: payload.notificationId || `${payload.type}:${payload.reviewItemId || payload.taskId || "summary"}`,
-      data: { target, reviewItemId: payload.reviewItemId || null, notificationId: payload.notificationId || null },
-      actions: review ? [
-        { action: "accept", title: confirmation ? "Done" : "Accept" },
-        { action: "reject", title: confirmation ? "Not yet" : "Reject" },
-      ] : [],
-    },
-  );
+    : payload.type === "reminder" || payload.type === "handled" ? `/#/tasks/${encodeURIComponent(payload.taskId)}` : "/#/tasks";
+  const title = handled
+    ? "Looks already handled"
+    : review ? "Review needed"
+      : payload.type === "reminder" ? "Task reminder"
+        : payload.type === "handled" ? HANDLED_TITLES[payload.status] || "Saved"
+          : "Daily summary";
+  const body = handled
+    ? "A proposed task looks done already."
+    : review ? "A task decision is waiting."
+      : payload.type === "reminder" ? "A task is due soon."
+        : payload.type === "handled" ? "A task from your chats was already handled."
+          : "Open your task summary.";
+  await self.registration.showNotification(title, {
+    body,
+    icon: "/app-icon.png",
+    badge: "/app-icon.png",
+    // One notification per Review item: an update replaces the earlier one instead of stacking.
+    tag: review ? `review:${payload.reviewItemId}` : payload.notificationId || `${payload.type}:${payload.taskId || "summary"}`,
+    renotify: review,
+    data: { target, reviewItemId: payload.reviewItemId || null, notificationId: payload.notificationId || null, handled: handled || null },
+    actions: !review ? [] : handled ? [
+      { action: "accept", title: handled === "cancelled" ? "Save as cancelled" : "Save as done" },
+      { action: "reject", title: "Discard" },
+    ] : [
+      { action: "accept", title: confirmation ? "Done" : "Accept" },
+      { action: "reject", title: confirmation ? "Not yet" : "Reject" },
+    ],
+  });
   await acknowledge(payload.notificationId).catch(() => {});
   await notifyWindows();
 }
@@ -80,7 +98,7 @@ self.addEventListener("notificationclick", (event) => {
           method: "POST",
           credentials: "same-origin",
           headers: { "content-type": "application/json", "idempotency-key": crypto.randomUUID() },
-          body: "{}",
+          body: JSON.stringify(event.action === "accept" && data.handled ? { closeAs: data.handled } : {}),
         });
         if (!response.ok) throw new Error(`Decision failed: ${response.status}`);
         event.notification.close();

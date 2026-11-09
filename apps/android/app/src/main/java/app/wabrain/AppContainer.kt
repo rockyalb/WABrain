@@ -14,6 +14,7 @@ import app.wabrain.data.session.KeystoreTokenCipher
 import app.wabrain.data.session.PairingManager
 import app.wabrain.data.session.SessionStore
 import app.wabrain.data.session.WidgetPrefs
+import app.wabrain.data.session.TaskListPrefs
 import app.wabrain.notify.NotificationFeed
 import app.wabrain.notify.NotificationInbox
 import app.wabrain.notify.NotificationLedger
@@ -34,6 +35,7 @@ class AppContainer(context: Context) {
     val db: AppDatabase = AppDatabase.create(appContext)
     val session = SessionStore(appContext, KeystoreTokenCipher())
     val widgetPrefs = WidgetPrefs(appContext)
+    val taskListPrefs = TaskListPrefs(appContext)
     val api = ApiClient(ApiClient.defaultHttpClient()) { session.credentials() }
 
     private val hooks = object : ChangeHooks {
@@ -43,6 +45,10 @@ class AppContainer(context: Context) {
 
         override fun outboxEnqueued() {
             WorkScheduler.flushOutbox(appContext)
+        }
+
+        override suspend fun reviewsSynced(pendingReviewIds: Set<String>, syncStartedAt: Long) {
+            runCatching { Notifier.pruneReviews(appContext, pendingReviewIds, syncStartedAt) }
         }
     }
 

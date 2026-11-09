@@ -31,3 +31,15 @@ export {
   type RulesIntakeFilter,
   type RulesIntakeFilterOptions,
 } from "./intake-filter.js";
+export {
+  cleanLinkName,
+  linkedChatIds,
+  editDistance,
+  nameWordFuzzyMatches,
+  nameWordMatches,
+  resolveLinkName,
+  resolveTaskLinks,
+  ACTIVE_CHAT_DAYS,
+  type LinkableChat,
+  type ResolveLinkOptions,
+} from "./links.js";

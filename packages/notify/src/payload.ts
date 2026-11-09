@@ -10,7 +10,16 @@ import type { ReviewItemType } from "@wabrain/contracts";
  */
 export type PushPayload =
   | { type: "sync" }
-  | { type: "review"; notificationId?: string; reviewItemId: string; reviewType: ReviewItemType; title: string; from?: string }
+  | {
+      type: "review";
+      notificationId?: string;
+      reviewItemId: string;
+      reviewType: ReviewItemType;
+      title: string;
+      from?: string;
+      handled?: "done" | "cancelled";
+    }
+  | { type: "handled"; notificationId?: string; taskId: string; title: string; status: "done" | "cancelled"; from?: string }
   | { type: "reminder"; notificationId?: string; taskId: string; title: string; dueAt: string }
   | { type: "summary"; notificationId?: string; open: number; dueToday: number; overdue: number; review: number };
 

@@ -16,7 +16,7 @@ const baseCase: EvalCase = {
   person: "Ana",
   openTasks: [
     { id: "t1", kind: "todo", title: "Send the contract", dueAt: "2026-09-24T17:00:00+02:00", dueHasTime: false },
-    { id: "t2", kind: "waiting_on", title: "Ana dergon fotot", dueAt: null },
+    { id: "t2", kind: "waiting_on", title: "Ana sends the photos", dueAt: null },
   ],
   context: [{ id: "old", at: "09:00", fromOwner: false, sender: "Ana", text: "miremengjes" }],
   burst: [
@@ -31,7 +31,7 @@ const action = (overrides: Partial<ModelTaskAction>): ModelTaskAction => ({
   type: "create",
   kind: "todo",
   title: "Send the contract to Ana",
-  description: "Ana e kerkoi kontraten.",
+  description: "Ana asked for the contract.",
   language: "en",
   due: null,
   taskId: null,
@@ -39,6 +39,7 @@ const action = (overrides: Partial<ModelTaskAction>): ModelTaskAction => ({
   contextId: null,
   contextReason: null,
   handled: null,
+  involves: null,
   confidence: 0.9,
   ambiguityReasons: [],
   evidenceMessageIds: ["m1"],
@@ -174,7 +175,7 @@ describe("validateModelActions", () => {
 describe("validateModelActions with pending creates", () => {
   const pendingMemory = buildCaseMemory({
     ...baseCase,
-    pendingTasks: [{ id: "p1", kind: "waiting_on", title: "Ana dergon faturen", dueAt: "2026-09-24T17:00:00+02:00", dueHasTime: false }],
+    pendingTasks: [{ id: "p1", kind: "waiting_on", title: "Ana sends the invoice", dueAt: "2026-09-24T17:00:00+02:00", dueHasTime: false }],
   });
   const validatePending = (...actions: ModelTaskAction[]) => validateModelActions({ actions }, pendingMemory, EVAL_SETTINGS);
 
@@ -197,7 +198,7 @@ describe("validateModelActions with pending creates", () => {
   });
 
   it("drops a create repeating a pending title", () => {
-    const { actions, dropped } = validatePending(action({ kind: "waiting_on", title: "ana dergon FATUREN" }));
+    const { actions, dropped } = validatePending(action({ kind: "waiting_on", title: "ana sends the INVOICE" }));
     expect(actions).toEqual([]);
     expect(dropped[0]?.reason).toBe("duplicate");
   });
@@ -207,10 +208,47 @@ describe("validateModelActions with pending creates", () => {
   });
 });
 
+describe("validateModelActions with linked tasks and involves", () => {
+  const linkedMemory = buildCaseMemory({
+    ...baseCase,
+    linkedTasks: [{ id: "lk1", kind: "todo", title: "Send Jordan the list", dueAt: null, fromChat: "Casey" }],
+  });
+  const validateLinked = (...actions: ModelTaskAction[]) => validateModelActions({ actions }, linkedMemory, EVAL_SETTINGS);
+
+  it("accepts complete and cancel on a linked id", () => {
+    const { actions, dropped } = validateLinked(action({ type: "complete", taskId: "lk1" }), action({ type: "cancel", taskId: "lk1" }));
+    expect(dropped).toEqual([]);
+    expect(actions.map((kept) => kept.type)).toEqual(["complete", "cancel"]);
+  });
+
+  it("never reschedules or merges a linked id", () => {
+    const { dropped } = validateLinked(
+      action({ type: "reschedule", taskId: "lk1", due: { date: "2026-09-28", time: null } }),
+      action({ type: "merge", taskIds: ["t1", "lk1"] }),
+    );
+    expect(dropped.map((drop) => drop.reason)).toEqual(["unknown_task", "unknown_task"]);
+  });
+
+  it("returns the cleaned names a create involves, parallel to the actions", () => {
+    const { actions, involves } = validateLinked(
+      action({ type: "complete", taskId: "lk1" }),
+      action({ involves: [" @Jordan ", "jordan", "", "Robin", "Design group", "Taylor"] }),
+    );
+    expect(actions.map((kept) => kept.type)).toEqual(["complete", "create"]);
+    expect(involves).toEqual([[], ["Jordan", "Robin", "Design group"]]);
+  });
+
+  it("lists linked tasks in the trusted data with the chat they came from", () => {
+    const prompt = renderTaskAnalysisPrompt(linkedMemory);
+    expect(prompt).toContain('"linkedTasks":[{"id":"lk1","kind":"todo","title":"Send Jordan the list","due":null,"fromChat":"Casey","pending":false}]');
+    expect(prompt.indexOf('"linkedTasks"')).toBeLessThan(prompt.indexOf("<conversation>"));
+  });
+});
+
 describe("renderTaskAnalysisPrompt", () => {
   it("lists pending tasks as trusted system data", () => {
-    const prompt = renderTaskAnalysisPrompt(buildCaseMemory({ ...baseCase, pendingTasks: [{ id: "p1", kind: "todo", title: "Dergo raportin", dueAt: null }] }));
-    expect(prompt).toContain('"pendingTasks":[{"id":"p1","kind":"todo","title":"Dergo raportin","due":null}]');
+    const prompt = renderTaskAnalysisPrompt(buildCaseMemory({ ...baseCase, pendingTasks: [{ id: "p1", kind: "todo", title: "Send the report", dueAt: null }] }));
+    expect(prompt).toContain('"pendingTasks":[{"id":"p1","kind":"todo","title":"Send the report","due":null}]');
     expect(prompt.indexOf('"pendingTasks"')).toBeLessThan(prompt.indexOf("<conversation>"));
   });
 

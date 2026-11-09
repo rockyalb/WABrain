@@ -57,6 +57,41 @@
       "when": 1790595773625,
       "tag": "0007_review_handled_hint",
       "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1790846251830,
+      "tag": "0008_task_links",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1790859787429,
+      "tag": "0009_task_closed_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1790929122331,
+      "tag": "0010_person_context",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1791114610293,
+      "tag": "0011_task_created_by",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "7",
+      "when": 1793261554581,
+      "tag": "0012_new_installs_no_trial",
+      "breakpoints": true
     }
   ]
 }

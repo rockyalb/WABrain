@@ -21,7 +21,8 @@ import { newId } from "../ids.js";
 import { chats, devices, notificationDeliveries, notificationEvents, people, reviewItems } from "../schema.js";
 
 export type NotificationPayload =
-  | { type: "review"; reviewItemId: string; reviewType: ReviewItemType; title: string; from?: string }
+  | { type: "review"; reviewItemId: string; reviewType: ReviewItemType; title: string; from?: string; handled?: "done" | "cancelled" }
+  | { type: "handled"; taskId: string; title: string; status: "done" | "cancelled"; from?: string }
   | { type: "reminder"; taskId: string; title: string; dueAt: string }
   | { type: "summary"; open: number; dueToday: number; overdue: number; review: number };
 
@@ -89,15 +90,28 @@ export async function enqueueNotification(db: Db, input: EnqueueNotificationInpu
 
 /**
  * The notification for a new or changed Review item. The key includes the item's `createdAt`, which
- * changes when a pending proposal is replaced, so the replacement notifies again and the previous
- * event is withdrawn.
+ * changes when a pending proposal is replaced, and whether a later message showed the create already
+ * handled, so either change notifies again and the previous event is withdrawn. Devices show one
+ * notification per Review item, so the new one replaces the old.
  */
 export async function enqueueReviewNotification(
   db: Db,
-  item: { id: string; type: ReviewItemType; title: string; taskId: string | null; createdAt: Date | string },
+  item: {
+    id: string;
+    type: ReviewItemType;
+    title: string;
+    taskId: string | null;
+    createdAt: Date | string;
+    needsPick?: boolean;
+    /** A create that looks already handled: the notification offers "Save as done" and Discard. */
+    handled?: "done" | "cancelled" | null;
+    /** When it is announced, if later than createdAt (a handled hint learned afterwards). */
+    at?: Date;
+  },
 ): Promise<string> {
-  const at = new Date(item.createdAt);
-  const key = `review:${item.id}:${at.toISOString()}`;
+  const created = new Date(item.createdAt);
+  const key = `review:${item.id}:${created.toISOString()}${item.handled ? `:${item.handled}` : ""}`;
+  const at = item.at ?? created;
   const from = await reviewOrigin(db, item.id);
   await db
     .delete(notificationEvents)
@@ -108,9 +122,37 @@ export async function enqueueReviewNotification(
     expiresAt: new Date(at.getTime() + REVIEW_NOTIFICATION_TTL_MS),
     reviewItemId: item.id,
     taskId: item.taskId,
-    payload: { type: "review", reviewItemId: item.id, reviewType: item.type, title: item.title, ...(from ? { from } : {}) },
+    payload: {
+      type: "review",
+      reviewItemId: item.id,
+      reviewType: item.type,
+      title: item.title,
+      ...(from ? { from } : {}),
+      ...(item.needsPick ? { needsPick: true } : {}),
+      ...(item.handled ? { handled: item.handled } : {}),
+    },
   });
 }
+
+/**
+ * "Saved as done": a create the analysis applied straight into Done or Cancelled because the same
+ * burst showed it handled. Informational; it stays listed only while the task keeps that status.
+ */
+export async function enqueueHandledNotification(
+  db: Db,
+  task: { taskId: string; title: string; status: "done" | "cancelled"; chatId: string | null; personId: string | null; at: Date },
+): Promise<string> {
+  const from = await chatOrigin(db, task.chatId, task.personId);
+  return enqueueNotification(db, {
+    key: `handled:${task.taskId}`,
+    at: task.at,
+    expiresAt: new Date(task.at.getTime() + HANDLED_NOTIFICATION_TTL_MS),
+    taskId: task.taskId,
+    payload: { type: "handled", taskId: task.taskId, title: task.title, status: task.status, ...(from ? { from } : {}) },
+  });
+}
+
+const HANDLED_NOTIFICATION_TTL_MS = 86_400_000;
 
 const MAX_FROM_CHARS = 80;
 
@@ -120,24 +162,34 @@ const MAX_FROM_CHARS = 80;
  */
 async function reviewOrigin(db: Db, reviewItemId: string): Promise<string | null> {
   const [row] = await db
-    .select({ chat: chats.name, isGroup: chats.isGroup, person: people.displayName })
+    .select({ chatId: reviewItems.chatId, personId: reviewItems.personId })
     .from(reviewItems)
-    .leftJoin(chats, eq(chats.id, reviewItems.chatId))
-    .leftJoin(people, eq(people.id, reviewItems.personId))
     .where(eq(reviewItems.id, reviewItemId));
-  const person = row?.person?.trim() || null;
-  const chat = row?.chat?.trim() || null;
-  const from = row?.isGroup && person && chat ? `${person} · ${chat}` : (person ?? chat);
+  return row ? chatOrigin(db, row.chatId, row.personId) : null;
+}
+
+/** The same "Person · Group" label for a chat and person. */
+async function chatOrigin(db: Db, chatId: string | null, personId: string | null): Promise<string | null> {
+  const [chatRow] = chatId ? await db.select({ name: chats.name, isGroup: chats.isGroup }).from(chats).where(eq(chats.id, chatId)) : [];
+  const [personRow] = personId ? await db.select({ name: people.displayName }).from(people).where(eq(people.id, personId)) : [];
+  const person = personRow?.name?.trim() || null;
+  const chat = chatRow?.name?.trim() || null;
+  const from = chatRow?.isGroup && person && chat ? `${person} · ${chat}` : (person ?? chat);
   return from ? from.slice(0, MAX_FROM_CHARS) : null;
 }
 
-/** Events still worth showing: unexpired, Review item still pending, reminder's task open with that due value. */
+/**
+ * Events still worth showing: unexpired, Review item still pending, reminder's task open with that due
+ * value, "saved as done" task still closed that way.
+ */
 const activeEvent = (now: Date) => sql`e.expires_at > ${now.toISOString()}::timestamptz
   and (e.review_item_id is null
     or exists (select 1 from review_items r where r.id = e.review_item_id and r.state = 'pending'))
   and (e.payload->>'type' <> 'reminder'
     or exists (select 1 from tasks t where t.id = e.task_id and t.status = 'open'
-      and t.due_at = (e.payload->>'dueAt')::timestamptz))`;
+      and t.due_at = (e.payload->>'dueAt')::timestamptz))
+  and (e.payload->>'type' <> 'handled'
+    or exists (select 1 from tasks t where t.id = e.task_id and t.status = e.payload->>'status'))`;
 
 const withId = (payload: NotificationPayload, id: string): DeliveredNotificationPayload => ({ ...payload, notificationId: id });
 

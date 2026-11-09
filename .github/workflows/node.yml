@@ -10,7 +10,9 @@ permissions:
   contents: read
 
 concurrency:
-  group: node-${{ github.ref }}
+  # github.workflow is the caller's name when another workflow calls this one,
+  # so a release run's checks never cancel the Node CI run for the same push.
+  group: node-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:

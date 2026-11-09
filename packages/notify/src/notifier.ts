@@ -77,6 +77,8 @@ export class PushNotifier implements ChangeNotifier {
       await this.flushPending();
       return;
     }
+    // Without durable delivery only Review items can be pushed directly; the rest arrive with the next sync.
+    if (event.type === "notification") return;
     await this.send({ type: "review", reviewItemId: event.reviewItemId, reviewType: event.reviewType, title: event.title });
   }
 

@@ -12,6 +12,7 @@ import app.wabrain.data.db.TaskEntity
 import app.wabrain.data.db.dto
 import app.wabrain.data.repo.TaskEdit
 import app.wabrain.domain.Instants
+import app.wabrain.domain.LinkInput
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
@@ -75,6 +76,7 @@ class TaskDetailViewModel(private val container: AppContainer, private val taskI
     }
 
     fun save(edit: TaskEdit) = viewModelScope.launch { container.tasks.update(taskId, edit) }
+    fun updateLinks(inputs: List<LinkInput>) = viewModelScope.launch { container.tasks.updateLinks(taskId, inputs) }
     fun complete() = viewModelScope.launch { container.tasks.complete(taskId) }
     fun reopen() = viewModelScope.launch { container.tasks.reopen(taskId) }
     fun cancel() = viewModelScope.launch { container.tasks.cancel(taskId) }

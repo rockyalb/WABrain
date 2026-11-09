@@ -16,6 +16,7 @@ import { toChat, type ChatRow } from "../mappers.js";
 import { findChatByJid } from "../repos/chats.js";
 import { savedContactNames, unsavedName } from "../repos/contact-names.js";
 import { deleteSourceEvent, getSourceEvent, markProjected } from "../repos/source-events.js";
+import { hasOpenLinks } from "../repos/task-links.js";
 import { chats, mediaObjects, messages, participants, people } from "../schema.js";
 
 export interface IntakeFilter {
@@ -248,7 +249,12 @@ export async function projectSourceEvent(deps: ProjectorDeps, sourceEventId: str
       quotedMessageId = quoted?.id ?? null;
       quotesOwner = quoted?.fromOwner ?? false;
     }
-    const analyzable = filter.shouldAnalyze(message, toChat(chat), { quotesOwner });
+    const selected = filter.shouldAnalyze(message, toChat(chat), { quotesOwner });
+    // A "mentions only" group with tasks linked to it: its live messages are analyzed anyway, but only
+    // to close those tasks (the policy drops anything else they would cause).
+    const linkedOnly =
+      !selected && message.source === "webhook" && chat.isGroup && chat.mode === "mentions_only" && (await hasOpenLinks(db, chat.id));
+    const analyzable = selected || linkedOnly;
 
     const [inserted] = await db
       .insert(messages)
@@ -272,6 +278,7 @@ export async function projectSourceEvent(deps: ProjectorDeps, sourceEventId: str
         hasMedia: message.hasMedia,
         source: message.source,
         analyzable,
+        linkedOnly,
         sentAt,
       })
       .onConflictDoNothing({ target: [messages.chatId, messages.waMessageId] })

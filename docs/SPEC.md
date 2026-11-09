@@ -76,10 +76,12 @@ widget.
 
 ### Trial period
 
-For the first 7 days, every proposed task goes to Review. Approvals and
-rejections form a labelled evaluation set, and the automatic-creation threshold
-is tuned on it before auto-create is enabled. The set is then reused to test
-prompt and model changes.
+New installs start without a trial: proposals at or above the
+automatic-change threshold (default 80%, set in the app or on the setup page)
+are created right away, and the rest go to Review. The owner can set a trial
+of up to 90 days on the setup page, during which every proposed task goes to
+Review. Approvals and rejections form a labelled evaluation set, reused to test
+prompt and model changes; they do not change the threshold.
 
 ### Language and dates
 
@@ -93,9 +95,10 @@ prompt and model changes.
 
 ## Contexts
 
-- Each chat has a default context, suggested from the person profile and
-  confirmed by the owner once. A single task can override it; for example, a
-  colleague organizing a birthday dinner gives a Personal task.
+- Each person has a default context, suggested from their profile and
+  confirmed by the owner once; their direct chat shares it. Each group chat has
+  its own. A single task can override it; for example, a colleague organizing a
+  birthday dinner gives a Personal task.
 - Contexts are an editable list with the defaults **Work** and **Personal**.
 - The widget and task list filter by context.
 
@@ -153,7 +156,8 @@ QR code, which provides the server URL and a revocable per-device token.
   change history, undo, edit, and context override.
 - **People**: profile cards with the source of each fact, editable, with the
   person's default context.
-- **Chats**: Off, On, or mentions-only for groups; default context; search.
+- **Chats**: Off, On, or mentions-only for groups; a group's context (a direct
+  chat shows its person's); search.
 - **Settings**: server connection, contexts, timezone, end-of-work-day time,
   reminders, daily summary time, and AI and privacy information.
 - **Ask** (phase 3): see below.

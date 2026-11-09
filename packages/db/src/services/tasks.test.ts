@@ -1,10 +1,11 @@
+import { readFile } from "node:fs/promises";
 import type { PolicyDecision, TaskAction } from "@wabrain/contracts";
 import { eq } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { ChangeEvent } from "../notifier.js";
 import { readSync } from "../repos/sync.js";
 import { newId } from "../ids.js";
-import { getTaskDetail, listPendingCreatesForChat } from "../repos/tasks.js";
+import { getTaskDetail, listPendingCreatesForChat, listTasks } from "../repos/tasks.js";
 import { chats, evalExamples, messages, notificationEvents, reviewItems } from "../schema.js";
 import { createTestDatabase, type TestDatabase } from "../testing.js";
 import { TaskService } from "./tasks.js";
@@ -72,9 +73,35 @@ describe("TaskService", () => {
 
     const undone = await service.undoEvent(detail.events[0]!.id);
     expect(undone.status).toBe("cancelled");
+    expect(undone.closedBy).toBe("owner");
     await expect(service.undoEvent(detail.events[0]!.id)).rejects.toMatchObject({ code: "conflict" });
     const after = await getTaskDetail(testDb.database.db, result.task.id);
     expect(after.events.map((event) => event.type)).toEqual(["created", "undone"]);
+  });
+
+  it("records who created a task: AI only when applied on its own, not when accepted in Review", async () => {
+    const auto = await service.applyAction(createAction("Auto task"), apply);
+    if (auto.outcome !== "applied") throw new Error("expected apply");
+    expect(auto.task).toMatchObject({ origin: "ai", createdBy: "ai" });
+    expect((await readSync(testDb.database, null, now)).tasks.find((task) => task.id === auto.task.id)?.createdBy).toBe("ai");
+
+    const proposed = await service.applyAction(createAction("Reviewed task"), review);
+    if (proposed.outcome !== "review") throw new Error("expected review");
+    const { task: accepted } = await service.acceptReview(proposed.reviewItem.id);
+    expect(accepted).toMatchObject({ origin: "ai", createdBy: "owner" });
+
+    const { task: manual } = await service.createManualTask({ kind: "todo", title: "Manual task" });
+    expect(manual.createdBy).toBe("owner");
+
+    // Backfill from history: the created event's actor, else the owner for manual tasks.
+    const { task: legacy } = await service.createManualTask({ kind: "todo", title: "No history" });
+    await testDb.database.sql`delete from task_events where task_id = ${legacy.id}`;
+    await testDb.database.sql`update tasks set created_by = null where id in (${auto.task.id}, ${accepted!.id}, ${legacy.id})`;
+    const migration = await readFile(new URL("../../drizzle/0011_task_created_by.sql", import.meta.url), "utf8");
+    await testDb.database.sql.unsafe(migration.split("--> statement-breakpoint")[1]!);
+    expect((await getTaskDetail(testDb.database.db, auto.task.id)).task.createdBy).toBe("ai");
+    expect((await getTaskDetail(testDb.database.db, accepted!.id)).task.createdBy).toBe("owner");
+    expect((await getTaskDetail(testDb.database.db, legacy.id)).task.createdBy).toBe("owner");
   });
 
   it("completes on owner evidence and undo restores the task", async () => {
@@ -87,9 +114,56 @@ describe("TaskService", () => {
     if (completed.outcome !== "applied") throw new Error("expected apply");
     expect(completed.task.status).toBe("done");
     expect(completed.task.closedAt).toBe(now.toISOString());
+    expect(completed.task.closedBy).toBe("ai");
+    expect((await listTasks(testDb.database.db, { status: "closed" })).items.find((task) => task.id === created.task.id)?.closedBy).toBe("ai");
+    expect((await readSync(testDb.database, null, now)).tasks.find((task) => task.id === created.task.id)?.closedBy).toBe("ai");
     const undone = await service.undoEvent(completed.eventIds[0]!);
     expect(undone.status).toBe("open");
     expect(undone.closedAt).toBeNull();
+    expect(undone.closedBy).toBeNull();
+  });
+
+  it("keeps the closure actor through edits and undo, then replaces it after an owner closure", async () => {
+    const { task } = await service.createManualTask({ kind: "todo", title: "Manual task" });
+    const cancelled = await service.applyAction(
+      { type: "cancel", taskId: task.id, confidence: 0.9, ambiguityReasons: [], evidenceMessageIds: ["m-cancel"] },
+      { outcome: "apply", reason: "owner_evidence" },
+    );
+    if (cancelled.outcome !== "applied") throw new Error("expected apply");
+    expect(cancelled.task).toMatchObject({ origin: "manual", status: "cancelled", closedBy: "ai" });
+    expect(await service.updateTask(task.id, { title: "Renamed" })).toMatchObject({ closedBy: "ai" });
+    expect(await service.setStatus(task.id, "open")).toMatchObject({ closedBy: null });
+    const reopened = await getTaskDetail(testDb.database.db, task.id);
+    const reopenEvent = reopened.events.find((event) => event.type === "reopened")!;
+    expect(await service.undoEvent(reopenEvent.id)).toMatchObject({ status: "cancelled", closedBy: "ai" });
+    await service.setStatus(task.id, "open");
+    expect(await service.setStatus(task.id, "done")).toMatchObject({ closedBy: "owner" });
+  });
+
+  it("backfills legacy closures from history and restores their actor when undoing a reopen", async () => {
+    const { task } = await service.createManualTask({ kind: "todo", title: "Legacy closure" });
+    await service.applyAction(
+      { type: "complete", taskId: task.id, confidence: 0.9, ambiguityReasons: [], evidenceMessageIds: ["m-legacy"] },
+      { outcome: "apply", reason: "owner_evidence" },
+    );
+    now = new Date(now.getTime() + 1_000);
+    await service.setStatus(task.id, "open");
+    const detail = await getTaskDetail(testDb.database.db, task.id);
+    const reopenEvent = detail.events.find((event) => event.type === "reopened")!;
+    // Simulate history written by the previous server version, with no actor in snapshots.
+    await testDb.database.sql`update task_events set "before" = "before" - 'closedBy', "after" = "after" - 'closedBy' where task_id = ${task.id}`;
+    expect(await service.undoEvent(reopenEvent.id)).toMatchObject({ status: "done", closedBy: "ai" });
+
+    const { task: owner } = await service.createManualTask({ kind: "todo", title: "Owner closure" });
+    await service.setStatus(owner.id, "cancelled");
+    const { task: unknown } = await service.createManualTask({ kind: "todo", title: "Unknown history" });
+    await testDb.database.sql`update tasks set status = 'done', closed_at = ${now.toISOString()} where id = ${unknown.id}`;
+    await testDb.database.sql`update tasks set closed_by = null where id in (${task.id}, ${owner.id})`;
+    const migration = await readFile(new URL("../../drizzle/0009_task_closed_by.sql", import.meta.url), "utf8");
+    await testDb.database.sql.unsafe(migration.split("--> statement-breakpoint")[1]!);
+    expect((await getTaskDetail(testDb.database.db, task.id)).task.closedBy).toBe("ai");
+    expect((await getTaskDetail(testDb.database.db, owner.id)).task.closedBy).toBe("owner");
+    expect((await getTaskDetail(testDb.database.db, unknown.id)).task.closedBy).toBeNull();
   });
 
   it("rejects undo after the undo window", async () => {
@@ -123,6 +197,7 @@ describe("TaskService", () => {
     const accepted = await service.acceptReview(possiblyDone.reviewItem.id);
     expect(accepted.reviewItem.state).toBe("accepted");
     expect(accepted.task?.status).toBe("done");
+    expect(accepted.task?.closedBy).toBe("owner");
     await expect(service.acceptReview(possiblyDone.reviewItem.id)).rejects.toMatchObject({ code: "conflict" });
   });
 
@@ -292,7 +367,7 @@ describe("TaskService", () => {
       await testDb.database.db.insert(chats).values({ id: chatId, jid: `${chatId}@s.whatsapp.net`, name: "Mira", isGroup: false, mode: "on" });
     });
 
-    it("marks the pending create as possibly done, quoting the message, without a new item or alert", async () => {
+    it("marks the pending create as possibly done, quoting the message, and replaces its alert", async () => {
       const item = await pendingCreate("Mira sends the wedding photos");
       const evidence = await message("here they are, all of them 📸");
       events = [];
@@ -307,8 +382,13 @@ describe("TaskService", () => {
         fromOwner: false,
         at: now.toISOString(),
       });
-      expect(events).toEqual([{ type: "sync" }]);
+      expect(events).toEqual([{ type: "sync" }, { type: "notification" }]);
       expect(await testDb.database.db.select().from(reviewItems).where(eq(reviewItems.chatId, chatId))).toHaveLength(1);
+      // The item's earlier Accept / Reject alert is withdrawn for one offering "Save as done".
+      const alerts = await testDb.database.db.select().from(notificationEvents).where(eq(notificationEvents.reviewItemId, item.id));
+      expect(alerts.map((alert) => alert.payload)).toEqual([
+        expect.objectContaining({ type: "review", reviewItemId: item.id, reviewType: "create", handled: "done" }),
+      ]);
       // A retried job applies nothing twice.
       events = [];
       const retried = await service.applyAction(change("complete", item.id, evidence), pendingDecision, { chatId, actionKey: "run-2:0" });
@@ -373,7 +453,39 @@ describe("TaskService", () => {
       expect(result.reviewItem.handled).toMatchObject({ status: "done", evidenceMessageIds: [reply], excerpt: "here you go, all ready", fromOwner: true });
       expect(events.map((event) => event.type)).toEqual(["review"]);
       const { task } = await service.acceptReview(result.reviewItem.id, {}, "done");
-      expect(task).toMatchObject({ status: "done", title: "Check the order document" });
+      expect(task).toMatchObject({ status: "done", closedBy: "owner", title: "Check the order document" });
+    });
+
+    it("saves a create handled in its own burst straight into Done when the policy applies it", async () => {
+      const request = await message("can you send the offer?");
+      const reply = await message("sent it", true);
+      events = [];
+      const result = await service.applyAction(
+        { ...(createAction("Send the offer") as Extract<TaskAction, { type: "create" }>), evidenceMessageIds: [request], alreadyHandled: { status: "done", evidenceMessageIds: [reply] } },
+        { outcome: "apply", reason: "already_handled" },
+        { chatId },
+      );
+      if (result.outcome !== "applied") throw new Error("expected applied");
+      expect(result.task).toMatchObject({ status: "done", closedBy: "ai", title: "Send the offer" });
+      expect(result.eventIds).toHaveLength(2);
+      const detail = await getTaskDetail(testDb.database.db, result.task.id);
+      expect(detail.events.map((event) => [event.type, event.actor])).toEqual([["created", "ai"], ["completed", "ai"]]);
+      expect(detail.events[1]!.evidenceMessageIds).toEqual([reply]);
+      expect(events).toEqual([{ type: "sync" }, { type: "notification" }]);
+      const alerts = await testDb.database.db.select().from(notificationEvents).where(eq(notificationEvents.taskId, result.task.id));
+      expect(alerts.map((alert) => alert.payload)).toEqual([
+        expect.objectContaining({ type: "handled", taskId: result.task.id, title: "Send the offer", status: "done" }),
+      ]);
+      // One undo removes both the creation and the closing.
+      const undone = await service.undoEvent(result.eventIds[0]!);
+      expect(undone).toMatchObject({ status: "cancelled" });
+    });
+
+    it("creates an ordinary open task from an auto-applied create", async () => {
+      const result = await service.applyAction(createAction("Pay the deposit"), apply, { chatId });
+      if (result.outcome !== "applied") throw new Error("expected applied");
+      expect(result.task.status).toBe("open");
+      expect(await testDb.database.db.select().from(notificationEvents).where(eq(notificationEvents.taskId, result.task.id))).toEqual([]);
     });
 
     it("refuses closeAs on anything but a create", async () => {

@@ -26,10 +26,26 @@ export interface ValidatedActions {
   actions: TaskAction[];
   /** Parallel to actions: the model's reason for a context override, or null. */
   contextReasons: Array<string | null>;
+  /** Parallel to actions: for creates, the other people or groups the task involves, as written. */
+  involves: string[][];
   dropped: DroppedAction[];
 }
 
-type Outcome = { ok: true; action: TaskAction; contextReason: string | null } | { ok: false; reason: DropReason };
+type Outcome = { ok: true; action: TaskAction; contextReason: string | null; involves: string[] } | { ok: false; reason: DropReason };
+
+const MAX_INVOLVES = 3;
+
+function cleanInvolves(names: readonly string[] | null): string[] {
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const name of names ?? []) {
+    const value = clean(name).replace(/^@+/, "").slice(0, 80);
+    if (!value || seen.has(value.toLowerCase())) continue;
+    seen.add(value.toLowerCase());
+    kept.push(value);
+  }
+  return kept.slice(0, MAX_INVOLVES);
+}
 
 const MAX_AMBIGUITY_REASONS = 5;
 const LANGUAGE_RE = /^[a-z]{2,3}(?:-[a-z]{2})?$/i;
@@ -81,6 +97,7 @@ function convert(raw: ModelTaskAction, memory: WorkingMemory, settings: Pick<Set
       return {
         ok: true,
         contextReason: contextId ? contextReason : null,
+        involves: cleanInvolves(raw.involves),
         action: {
           type: "create",
           kind: raw.kind,
@@ -98,8 +115,10 @@ function convert(raw: ModelTaskAction, memory: WorkingMemory, settings: Pick<Set
     }
     case "complete":
     case "cancel": {
-      if (!raw.taskId || !(ids.openTasks.has(raw.taskId) || ids.pendingTasks.has(raw.taskId))) return { ok: false, reason: "unknown_task" };
-      return { ok: true, contextReason: null, action: { type: raw.type, taskId: raw.taskId, ...base } };
+      // A task linked from another chat may be closed here, never rescheduled or merged.
+      const known = ids.openTasks.has(raw.taskId ?? "") || ids.pendingTasks.has(raw.taskId ?? "") || ids.linkedTasks.has(raw.taskId ?? "");
+      if (!raw.taskId || !known) return { ok: false, reason: "unknown_task" };
+      return { ok: true, contextReason: null, involves: [], action: { type: raw.type, taskId: raw.taskId, ...base } };
     }
     case "reschedule": {
       if (!raw.taskId || !(ids.openTasks.has(raw.taskId) || ids.pendingTasks.has(raw.taskId))) return { ok: false, reason: "unknown_task" };
@@ -109,12 +128,12 @@ function convert(raw: ModelTaskAction, memory: WorkingMemory, settings: Pick<Set
       const current = [...memory.openTasks, ...memory.pendingTasks].find((task) => task.id === raw.taskId)?.due ?? null;
       if (current === localDueLabel(due, settings.timezone)) return { ok: false, reason: "no_change" };
       if (raw.due.date < memory.calendar.today) base.ambiguityReasons.push("the new due date is in the past");
-      return { ok: true, contextReason: null, action: { type: "reschedule", taskId: raw.taskId, ...due, ...base } };
+      return { ok: true, contextReason: null, involves: [], action: { type: "reschedule", taskId: raw.taskId, ...due, ...base } };
     }
     case "merge": {
       const taskIds = [...new Set(raw.taskIds ?? [])];
       if (taskIds.length < 2 || !taskIds.every((id) => ids.openTasks.has(id))) return { ok: false, reason: "unknown_task" };
-      return { ok: true, contextReason: null, action: { type: "merge", taskIds, ...base } };
+      return { ok: true, contextReason: null, involves: [], action: { type: "merge", taskIds, ...base } };
     }
   }
 }
@@ -132,7 +151,8 @@ function dedupeKey(action: TaskAction): string {
 
 /**
  * Turns raw model output into contract TaskActions. Drops actions that cite unknown messages or no new
- * message, reference tasks that are in neither the open nor the pending task list (merge: open only), repeat a
+ * message, reference tasks that are in neither the open nor the pending task list (complete and cancel:
+ * also the linked task list; merge: open only), repeat a
  * pending create's title, or lack required fields; keeps a create's same-burst handled hint only for new
  * messages; resolves
  * local dues into instants; keeps only allowed context overrides; removes duplicates (highest confidence
@@ -144,7 +164,7 @@ export function validateModelActions(
   settings: Pick<Settings, "timezone" | "endOfWorkDay">,
 ): ValidatedActions {
   const dropped: DroppedAction[] = [];
-  const kept = new Map<string, { index: number; action: TaskAction; contextReason: string | null }>();
+  const kept = new Map<string, { index: number; action: TaskAction; contextReason: string | null; involves: string[] }>();
 
   output.actions.forEach((raw, index) => {
     const outcome = convert(raw, memory, settings);
@@ -164,13 +184,14 @@ export function validateModelActions(
       return;
     }
     if (existing) dropped.push({ index: existing.index, reason: "duplicate", raw: output.actions[existing.index]! });
-    kept.set(key, { index, action: parsed.data, contextReason: outcome.contextReason });
+    kept.set(key, { index, action: parsed.data, contextReason: outcome.contextReason, involves: outcome.involves });
   });
 
   const ordered = [...kept.values()].sort((a, b) => a.index - b.index);
   return {
     actions: ordered.map((entry) => entry.action),
     contextReasons: ordered.map((entry) => entry.contextReason),
+    involves: ordered.map((entry) => entry.involves),
     dropped: dropped.sort((a, b) => a.index - b.index),
   };
 }

@@ -10,18 +10,24 @@ const FACT_KEYS: PersonFactKey[] = ["name", "company", "role", "relationship", "
 export function PeopleView(props: { hash: string }) {
   const { data } = useWorkspace();
   const [search, setSearch] = useState("");
+  const [filter, setFilter] = useState("all");
   const id = props.hash.replace(/^#\/?/, "").split("?")[0]!.split("/")[1];
   if (id) return <PersonView id={decodeURIComponent(id)} />;
-  const people = data.people.filter((person) => person.displayName.toLowerCase().includes(search.toLowerCase()));
+  const people = data.people.filter((person) => person.displayName.toLowerCase().includes(search.toLowerCase())
+    && (filter === "all" || (filter === "confirm" && suggested(person)) || (filter === "none" && !person.defaultContextId)));
   return <>
     <WorkspaceHeader logo eyebrow="Your network" title="People" description="Names, context and useful details learned from conversations." />
-    <div class="ws-toolbar"><label class="ws-search"><span>Search people</span><input type="search" placeholder="Name or contact" value={search} onInput={(event) => setSearch(event.currentTarget.value)} /></label><span class="ws-muted">{people.length} people</span></div>
+    <div class="ws-toolbar"><label class="ws-search"><span>Search people</span><input type="search" placeholder="Name or contact" value={search} onInput={(event) => setSearch(event.currentTarget.value)} /></label>
+      <label class="ws-filter">Show <select value={filter} onChange={(event) => setFilter(event.currentTarget.value)}><option value="all">Everyone</option><option value="confirm">Confirm context</option><option value="none">No context</option></select></label><span class="ws-muted">{people.length} people</span></div>
     {people.length ? <div class="ws-people-grid">{people.map((person) => {
       const context = data.contexts.find((item) => item.id === person.defaultContextId);
-      return <a key={person.id} class="ws-person-card" href={`#/people/${encodeURIComponent(person.id)}`}><span class="ws-avatar">{person.displayName.slice(0, 1).toUpperCase()}</span><span class="ws-person-info"><b>{person.displayName}</b><small>{person.facts.length} facts · {person.languages.join(", ") || "Language unknown"}</small>{context ? <ContextBadge name={context.name} color={context.color} /> : null}</span><span>↗</span></a>;
+      return <a key={person.id} class="ws-person-card" href={`#/people/${encodeURIComponent(person.id)}`}><span class="ws-avatar">{person.displayName.slice(0, 1).toUpperCase()}</span><span class="ws-person-info"><b>{person.displayName}</b><small>{person.facts.length} facts · {person.languages.join(", ") || "Language unknown"}</small>{context ? <span class="ws-person-badges"><ContextBadge name={context.name} color={context.color} />{suggested(person) ? <span class="ws-pill attention">Confirm</span> : null}</span> : null}</span><span>↗</span></a>;
     })}</div> : <EmptyState title="No people found">Try a different search, or wait for conversations to be processed.</EmptyState>}
   </>;
 }
+
+/** The context was suggested from the profile and the owner has not confirmed it yet. */
+const suggested = (person: Person) => Boolean(person.defaultContextId) && !person.contextConfirmed;
 
 function PersonView(props: { id: string }) {
   const { api, data, run, busy } = useWorkspace();
@@ -52,7 +58,8 @@ function PersonView(props: { id: string }) {
     <WorkspaceHeader eyebrow="Person profile" title={person.displayName} description={person.jids.join(" · ")} />
     <div class="ws-detail-grid"><section class="ws-panel"><h2>Profile</h2><form class="ws-form" onSubmit={save}>
       <label>Display name<input required maxLength={120} value={name} onInput={(event) => setName(event.currentTarget.value)} /></label>
-      <label>Default context<select value={contextId} onChange={(event) => setContextId(event.currentTarget.value)}><option value="">None</option>{data.contexts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      <label>Context<select value={contextId} onChange={(event) => setContextId(event.currentTarget.value)}><option value="">None</option>{data.contexts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}</select></label>
+      <p class="ws-hint">{suggested(person) ? "Suggested from what they talk about. Saving confirms your choice." : "Tasks from your direct chat with them get this context."}</p>
       <button type="submit" class="ws-button primary" disabled={busy}>Save profile</button></form>
       <div class="ws-divider" /><p class="ws-muted">Languages: {person.languages.join(", ") || "Not known yet"}</p></section>
       <section class="ws-panel"><h2>Add a fact</h2><form class="ws-form" onSubmit={add}><label>Type<select value={factKey} onChange={(event) => setFactKey(event.currentTarget.value as PersonFactKey)}>{FACT_KEYS.map((key) => <option key={key} value={key}>{key}</option>)}</select></label>

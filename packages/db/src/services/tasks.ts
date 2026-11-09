@@ -11,21 +11,20 @@ import type {
   Task,
   TaskAction,
   TaskKind,
+  TaskLink,
   TaskStatus,
 } from "@wabrain/contracts";
-import { and, asc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, desc, eq, inArray, isNull, sql } from "drizzle-orm";
 import type { Database, Db } from "../client.js";
 import { conflict, invalid, notFound } from "../errors.js";
 import { newId } from "../ids.js";
 import { toReviewItem, toTask, type ReviewItemRow, type TaskRow } from "../mappers.js";
 import { noopNotifier, safeNotify, type ChangeEvent, type ChangeNotifier } from "../notifier.js";
 import { writeAudit } from "../repos/audit.js";
-import { getAnalysisRun } from "../repos/analysis-runs.js";
-import { enqueueReviewNotification } from "../repos/notifications.js";
+import { enqueueHandledNotification, enqueueReviewNotification } from "../repos/notifications.js";
 import { getSettings } from "../repos/settings.js";
 import { findTaskRow, getReviewRow, getTaskRow } from "../repos/tasks.js";
 import { appliedActions, chats, contexts, evalExamples, messages, people, reviewItems, taskEvents, tasks } from "../schema.js";
-import { calibrateTaskProfile } from "../repos/task-calibration.js";
 import { isDateOnly, resolveDateOnly } from "../time.js";
 
 export const UNDO_WINDOW_MS = 7 * 86_400_000;
@@ -40,8 +39,10 @@ const SNAPSHOT_FIELDS = [
   "contextId",
   "chatId",
   "personId",
+  "links",
   "evidenceMessageIds",
   "closedAt",
+  "closedBy",
   "mergedIntoTaskId",
 ] as const;
 type SnapshotField = (typeof SNAPSHOT_FIELDS)[number];
@@ -55,6 +56,7 @@ const REVIEW_TYPE: Record<TaskAction["type"], ReviewItemType> = {
   cancel: "possibly_cancelled",
   reschedule: "reschedule",
   merge: "merge",
+  link: "link",
 };
 
 const snapshotValue = (value: unknown) => (value instanceof Date ? value.toISOString() : value);
@@ -66,7 +68,7 @@ function snapshot(row: Partial<TaskRow>, fields: readonly SnapshotField[]): Reco
 }
 
 function sameValue(a: unknown, b: unknown): boolean {
-  return JSON.stringify(snapshotValue(a) ?? null) === JSON.stringify(snapshotValue(b) ?? null);
+  return canonicalJson(snapshotValue(a)) === canonicalJson(snapshotValue(b));
 }
 
 /** JSON with object keys sorted, so a jsonb round trip (which reorders keys) compares equal. */
@@ -142,6 +144,16 @@ export interface ManualTaskInput {
   personId?: string | null;
 }
 
+/**
+ * The owner's list of links for a task (it replaces the current one). chatId set: link that chat (a
+ * pick from a "Who is Robin Diaz?" dropdown, or a chat added by hand). chatId null: keep an unconfirmed link
+ * the analysis proposed, by its name. A link left out is removed.
+ */
+export interface LinkInput {
+  name?: string | null;
+  chatId: string | null;
+}
+
 export interface TaskPatch {
   title?: string;
   description?: string;
@@ -149,7 +161,10 @@ export interface TaskPatch {
   dueHasTime?: boolean;
   contextId?: string | null;
   kind?: TaskKind;
+  links?: LinkInput[];
 }
+
+const MAX_LINKS = 5;
 
 export interface ApplyContext {
   chatId?: string | null;
@@ -177,6 +192,8 @@ export interface ReviewEdits {
   dueHasTime?: boolean;
   contextId?: string | null;
   kind?: TaskKind;
+  /** create only: the links the task gets (see LinkInput). */
+  links?: LinkInput[];
 }
 
 interface EventMeta {
@@ -253,8 +270,17 @@ export class TaskService {
     type: EventType,
     meta: EventMeta,
   ): Promise<{ row: TaskRow; eventId: string } | null> {
+    if (changes.status !== undefined && changes.status !== row.status) {
+      changes = {
+        ...changes,
+        closedBy: changes.status === "open" ? null
+          : type === "undone" ? changes.closedBy ?? null : meta.actor,
+      };
+    }
     const fields = (Object.keys(changes) as SnapshotField[]).filter((field) => !sameValue(row[field], changes[field]));
     if (!fields.length) return null;
+    // Keep the actor in every status snapshot, even when both closures were by the same actor.
+    if (fields.includes("status") && !fields.includes("closedBy")) fields.push("closedBy");
     const set = Object.fromEntries(fields.map((field) => [field, changes[field]])) as TaskChanges;
     const [updated] = await db
       .update(tasks)
@@ -278,6 +304,36 @@ export class TaskService {
       const [row] = await db.select({ id: people.id }).from(people).where(eq(people.id, refs.personId));
       if (!row) throw invalid(`Unknown person ${refs.personId}`);
     }
+  }
+
+  /**
+   * Turns the owner's link list into TaskLinks. Links that stay as they were keep their source and
+   * candidates; a new or re-pointed one is the owner's. The task's own chat, unknown chats and repeats
+   * are refused or dropped.
+   */
+  private async ownerLinks(db: Db, requested: readonly LinkInput[], existing: readonly TaskLink[], ownChatId: string | null): Promise<TaskLink[]> {
+    if (requested.length > MAX_LINKS) throw invalid(`At most ${MAX_LINKS} links`);
+    const chatIds = [...new Set(requested.map((link) => link.chatId).filter((id): id is string => Boolean(id)))];
+    if (ownChatId && chatIds.includes(ownChatId)) throw invalid("A task cannot be linked to its own chat");
+    const rows = chatIds.length
+      ? await db.select({ id: chats.id, name: chats.name, personName: people.displayName }).from(chats).leftJoin(people, eq(people.id, chats.personId)).where(inArray(chats.id, chatIds))
+      : [];
+    const chatName = new Map(rows.map((row) => [row.id, (row.personName ?? row.name ?? "").trim() || "Chat"]));
+    const links: TaskLink[] = [];
+    for (const input of requested) {
+      const name = input.name?.replace(/\s+/g, " ").trim().slice(0, 80) || null;
+      if (input.chatId) {
+        if (!chatName.has(input.chatId)) throw invalid(`Unknown chat ${input.chatId}`);
+        if (links.some((link) => link.chatId === input.chatId)) continue;
+        const same = existing.find((link) => link.chatId === input.chatId);
+        links.push(same ?? { name: name ?? chatName.get(input.chatId)!, chatId: input.chatId, candidates: [], source: "owner" });
+        continue;
+      }
+      // An unconfirmed link can only be kept, never invented: the owner links a chat instead.
+      const pending = existing.find((link) => link.chatId === null && link.name === name);
+      if (pending && !links.includes(pending)) links.push(pending);
+    }
+    return links;
   }
 
   /** Context inheritance: explicit → chat default → person default → none. */
@@ -330,6 +386,7 @@ export class TaskService {
           chatId: input.chatId ?? null,
           personId: inherited.personId,
           origin: "manual",
+          createdBy: "owner",
           createdAt: now,
           updatedAt: now,
         })
@@ -357,6 +414,8 @@ export class TaskService {
       if (patch.description !== undefined) changes.description = patch.description;
       if (patch.kind !== undefined) changes.kind = patch.kind;
       if (patch.contextId !== undefined) changes.contextId = patch.contextId;
+      const settled = patch.links !== undefined && (await this.settleLinkReviews(db, row.id));
+      if (patch.links !== undefined) changes.links = await this.ownerLinks(db, patch.links, row.links ?? [], row.chatId);
       const due = resolveDue(patch.dueAt, patch.dueHasTime, settings);
       if (due) Object.assign(changes, due);
       else if (patch.dueHasTime !== undefined) changes.dueHasTime = patch.dueHasTime;
@@ -366,7 +425,7 @@ export class TaskService {
         groupId: newId(),
         undoable: true,
       });
-      return { task: toTask(mutated?.row ?? row), changed: Boolean(mutated) };
+      return { task: toTask(mutated?.row ?? row), changed: Boolean(mutated) || settled };
     });
     if (result.changed) await this.emit({ type: "sync" });
     return result.task;
@@ -430,6 +489,7 @@ export class TaskService {
             title: created.title,
             taskId: created.reviewItem.taskId,
             createdAt: created.reviewItem.createdAt,
+            handled: created.reviewItem.handled?.status ?? null,
           });
         }
         if (key) await this.recordActionKey(db, key, { outcome: "review", reviewItemId: created.reviewItem.id });
@@ -438,6 +498,7 @@ export class TaskService {
       if ("previous" in result) return result.previous!;
       if ("pending" in result) {
         if (result.pending!.changed) await this.emit({ type: "sync" });
+        if (result.pending!.announced) await this.emit({ type: "notification" });
         return { outcome: "review", reviewItem: result.pending!.reviewItem, created: false };
       }
       const { created } = result;
@@ -464,6 +525,23 @@ export class TaskService {
         reviewItemId: null,
         policyReason: decision.reason,
       });
+      // A task created on its own with links to other chats: the owner confirms who they are.
+      const linkReview =
+        applied.outcome === "applied" && action.type === "create" && applied.task.links.length > 0
+          ? await this.proposeLinks(db, applied.task, action, ctx)
+          : null;
+      // Saved straight into Done or Cancelled: the owner hears about it, with nothing to decide.
+      const handledNotice =
+        applied.outcome === "applied" && action.type === "create" && applied.task.status !== "open"
+          ? await enqueueHandledNotification(db, {
+              taskId: applied.task.id,
+              title: applied.task.title,
+              status: applied.task.status,
+              chatId: applied.task.chatId,
+              personId: applied.task.personId,
+              at: this.now(),
+            })
+          : null;
       if (key) {
         await this.recordActionKey(
           db,
@@ -473,11 +551,65 @@ export class TaskService {
             : { outcome: "dropped", reason: applied.outcome === "dropped" ? applied.reason : null },
         );
       }
-      return { applied };
+      return { applied, linkReview, handledNotice };
     });
     if ("previous" in result) return result.previous!;
     if (result.applied.outcome === "applied") await this.emit({ type: "sync" });
+    if (result.linkReview) await this.emit({ type: "review", ...result.linkReview });
+    if (result.handledNotice) await this.emit({ type: "notification" });
     return result.applied;
+  }
+
+  /**
+   * The "Confirm contact" Review item for the links of a task the analysis created on its own. The
+   * links already work; the notification offers Accept (keep them) and Remove, or, when a name still
+   * needs a contact picked, opens the picker.
+   */
+  private async proposeLinks(
+    db: Db,
+    task: Task,
+    create: Extract<TaskAction, { type: "create" }>,
+    ctx: ApplyContext,
+  ): Promise<{ reviewItemId: string; reviewType: ReviewItemType; title: string }> {
+    const action: TaskAction = {
+      type: "link",
+      taskId: task.id,
+      links: task.links,
+      confidence: create.confidence,
+      ambiguityReasons: [],
+      evidenceMessageIds: create.evidenceMessageIds,
+    };
+    const { reviewItem } = await this.createReviewItem(db, action, { outcome: "review", reason: "link_confirmation" }, ctx);
+    const title = `${task.title} ${await this.linkSummary(db, task.links)}`.slice(0, 300);
+    await enqueueReviewNotification(db, {
+      id: reviewItem.id,
+      type: "link",
+      title,
+      taskId: task.id,
+      createdAt: reviewItem.createdAt,
+      needsPick: task.links.some((link) => !link.chatId),
+    });
+    return { reviewItemId: reviewItem.id, reviewType: "link", title };
+  }
+
+  /** "→ Jordan, Robin?": the linked chats by name; a name still to confirm ends in "?". */
+  private async linkSummary(db: Db, links: readonly TaskLink[]): Promise<string> {
+    const ids = links.map((link) => link.chatId).filter((id): id is string => Boolean(id));
+    const rows = ids.length
+      ? await db.select({ id: chats.id, name: chats.name, personName: people.displayName }).from(chats).leftJoin(people, eq(people.id, chats.personId)).where(inArray(chats.id, ids))
+      : [];
+    const names = new Map(rows.map((row) => [row.id, row.personName ?? row.name]));
+    return `→ ${links.map((link) => (link.chatId ? (names.get(link.chatId) ?? link.name) : `${link.name}?`)).join(", ")}`;
+  }
+
+  /** The owner set a task's links themselves: its pending "Confirm contact" item is answered. */
+  private async settleLinkReviews(db: Db, taskId: string): Promise<boolean> {
+    const settled = await db
+      .update(reviewItems)
+      .set({ state: "accepted", decidedAt: this.now() })
+      .where(and(eq(reviewItems.taskId, taskId), eq(reviewItems.type, "link"), eq(reviewItems.state, "pending")))
+      .returning({ id: reviewItems.id });
+    return settled.length > 0;
   }
 
   /**
@@ -552,7 +684,9 @@ export class TaskService {
           contextId,
           chatId,
           personId: inherited.personId,
+          links: (action.links ?? []).filter((link) => link.chatId !== chatId),
           origin: opts.ctx.origin ?? "ai",
+          createdBy: opts.actor,
           language: action.language,
           confidence: action.confidence,
           evidenceMessageIds: action.evidenceMessageIds,
@@ -561,6 +695,19 @@ export class TaskService {
         })
         .returning();
       const eventId = await this.insertEvent(db, row!.id, "created", null, snapshot(row!, SNAPSHOT_FIELDS), meta);
+      // Asked and already handled in the same burst: on record, straight into Done or Cancelled. Same
+      // group as the creation, so one undo removes both.
+      const handled = opts.policyReason === "already_handled" ? action.alreadyHandled : undefined;
+      if (handled) {
+        const closed = await this.mutate(
+          db,
+          row!,
+          { status: handled.status, closedAt: now },
+          handled.status === "done" ? "completed" : "cancelled",
+          { ...meta, evidenceMessageIds: handled.evidenceMessageIds },
+        );
+        if (closed) return { outcome: "applied", task: toTask(closed.row), eventIds: [eventId, closed.eventId] };
+      }
       return { outcome: "applied", task: toTask(row!), eventIds: [eventId] };
     }
 
@@ -597,6 +744,11 @@ export class TaskService {
 
     const row = await findTaskRow(db, action.taskId, true);
     if (!row) return { outcome: "dropped", reason: "unknown_task" };
+    if (action.type === "link") {
+      // The links are the task's already; a confirmation applies only the owner's edited list.
+      const mutated = await this.mutate(db, row, { links: action.links }, "edited", meta);
+      return { outcome: "applied", task: toTask(mutated?.row ?? row), eventIds: mutated ? [mutated.eventId] : [] };
+    }
     if (row.status !== "open") return { outcome: "dropped", reason: "task_not_open" };
     const [type, changes]: [EventType, TaskChanges] =
       action.type === "complete"
@@ -626,30 +778,48 @@ export class TaskService {
 
   /**
    * complete / cancel mark the pending create as possibly already handled (the owner still decides);
-   * reschedule moves its proposed due. Nothing is announced again: the item is already in Review.
+   * its notification is replaced by one offering "Save as done" (or "Save as cancelled") and Discard,
+   * so Accept / Reject do not linger on a task that is already handled. reschedule moves its proposed
+   * due without announcing it again.
    */
   private async updatePendingCreate(
     db: Db,
     item: ReviewItemRow,
     action: ChangeAction,
-  ): Promise<{ reviewItem: ReviewItem; changed: boolean }> {
+  ): Promise<{ reviewItem: ReviewItem; changed: boolean; announced: boolean }> {
     const proposal = item.action as TaskAction;
-    if (proposal.type !== "create") return { reviewItem: toReviewItem(item), changed: false };
+    if (proposal.type !== "create") return { reviewItem: toReviewItem(item), changed: false, announced: false };
     let set: Partial<typeof reviewItems.$inferInsert>;
     if (action.type === "reschedule") {
-      if (proposal.dueAt === action.dueAt && proposal.dueHasTime === action.dueHasTime) return { reviewItem: toReviewItem(item), changed: false };
+      if (proposal.dueAt === action.dueAt && proposal.dueHasTime === action.dueHasTime) {
+        return { reviewItem: toReviewItem(item), changed: false, announced: false };
+      }
       const evidenceMessageIds = [...new Set([...proposal.evidenceMessageIds, ...action.evidenceMessageIds])];
       set = { action: { ...proposal, dueAt: action.dueAt, dueHasTime: action.dueHasTime, evidenceMessageIds } };
     } else {
       const status = action.type === "complete" ? "done" : "cancelled";
       const previous = item.handled as ReviewHandledHint | null;
       if (previous?.status === status && sameCanonical(previous.evidenceMessageIds, action.evidenceMessageIds)) {
-        return { reviewItem: toReviewItem(item), changed: false };
+        return { reviewItem: toReviewItem(item), changed: false, announced: false };
       }
       set = { handled: await this.handledHint(db, status, action.evidenceMessageIds, action.confidence) };
     }
     const [updated] = await db.update(reviewItems).set(set).where(eq(reviewItems.id, item.id)).returning();
-    return { reviewItem: toReviewItem(updated!), changed: true };
+    const handled = (updated!.handled as ReviewHandledHint | null)?.status ?? null;
+    // Only a change of status re-alerts: new evidence for the same "done" keeps the current notification.
+    const announced = handled !== null && handled !== (item.handled as ReviewHandledHint | null)?.status;
+    if (announced) {
+      await enqueueReviewNotification(db, {
+        id: updated!.id,
+        type: updated!.type,
+        title: proposal.title,
+        taskId: updated!.taskId,
+        createdAt: updated!.createdAt,
+        handled,
+        at: this.now(),
+      });
+    }
+    return { reviewItem: toReviewItem(updated!), changed: true, announced };
   }
 
   /** The Review card's "may already be handled" hint, quoting the first message that shows it. */
@@ -717,6 +887,7 @@ export class TaskService {
       possibly_cancelled: "Possibly cancelled: ",
       reschedule: "Reschedule: ",
       merge: action.type === "merge" ? `Merge ${action.taskIds.length} tasks: ` : "",
+      link: "Contact: ",
     };
     const inherited = await this.inherit(db, ctx.chatId ?? task?.chatId ?? null, ctx.personId ?? task?.personId ?? null);
     const summary = `${prefix[type]}${title}`.slice(0, 300);
@@ -779,7 +950,7 @@ export class TaskService {
   /**
    * Accepts a Review item, optionally with owner edits. closeAs (creates only) accepts the proposal and
    * closes the new task at once, for a create a later message says was already handled: the task is
-   * kept in history and the create still counts as a correct proposal for calibration.
+   * kept in history and the create still counts as a correct proposal in the evaluation set.
    */
   async acceptReview(
     id: string,
@@ -845,6 +1016,7 @@ export class TaskService {
         .set({ state: "rejected", decidedAt: this.now() })
         .where(eq(reviewItems.id, id))
         .returning();
+      if (item.type === "link") await this.removeProposedLinks(db, item);
       await this.recordExample(db, item, "rejected", null, null);
       await writeAudit(db, {
         actor: "owner",
@@ -859,20 +1031,44 @@ export class TaskService {
     return result;
   }
 
+  /** Remove on a "Confirm contact" item: the links it proposed leave the task; links the owner added stay. */
+  private async removeProposedLinks(db: Db, item: ReviewItemRow): Promise<void> {
+    const action = item.action as TaskAction;
+    if (action.type !== "link") return;
+    const row = await findTaskRow(db, action.taskId, true);
+    if (!row) return;
+    const proposed = (link: TaskLink) =>
+      link.source === "ai" && action.links.some((other) => (link.chatId ? other.chatId === link.chatId : other.chatId === null && other.name === link.name));
+    await this.mutate(db, row, { links: (row.links ?? []).filter((link) => !proposed(link)) }, "edited", {
+      actor: "owner",
+      groupId: newId(),
+      undoable: true,
+      reviewItemId: item.id,
+    });
+  }
+
   private async withEdits(db: Db, item: ReviewItemRow, edits: ReviewEdits): Promise<TaskAction> {
     const action = item.action as TaskAction;
     const settings = await getSettings(db);
     const due = resolveDue(edits.dueAt, edits.dueHasTime, settings);
     if (action.type === "create") {
       if (edits.contextId) await this.assertRefs(db, { contextId: edits.contextId });
+      const links = edits.links !== undefined ? await this.ownerLinks(db, edits.links, action.links ?? [], item.chatId) : undefined;
       return {
         ...action,
+        ...(links !== undefined ? { links } : {}),
         title: edits.title ?? action.title,
         description: edits.description ?? action.description,
         kind: edits.kind ?? action.kind,
         contextId: edits.contextId !== undefined ? edits.contextId : action.contextId,
         ...(due ? { dueAt: due.dueAt?.toISOString() ?? null, dueHasTime: due.dueHasTime } : {}),
       };
+    }
+    if (action.type === "link") {
+      // Accepting as is keeps the task's links as they are now (the owner may have added one since).
+      const task = await getTaskRow(db, action.taskId);
+      const links = edits.links !== undefined ? await this.ownerLinks(db, edits.links, task.links ?? [], task.chatId) : (task.links ?? []);
+      return { ...action, links };
     }
     if (action.type === "reschedule" && due?.dueAt) {
       return { ...action, dueAt: due.dueAt.toISOString(), dueHasTime: due.dueHasTime };
@@ -901,13 +1097,6 @@ export class TaskService {
       chatId: item.chatId,
       analysisRunId: item.analysisRunId,
     });
-    // Every decided create is a label for the profile that proposed it: recalibrate that profile now.
-    if (item.type === "create" && item.analysisRunId) {
-      const run = await getAnalysisRun(db, item.analysisRunId);
-      if (run?.provider && run.model && run.promptVersion) {
-        await calibrateTaskProfile(db, { provider: run.provider, model: run.model, promptVersion: run.promptVersion }, this.now());
-      }
-    }
   }
 
   // -------------------------------------------------------------------------
@@ -939,12 +1128,24 @@ export class TaskService {
         const row = await getTaskRow(db, member.taskId, true);
         const changes: TaskChanges =
           member.type === "created"
-            ? { status: "cancelled", closedAt: now }
+            ? { status: "cancelled", closedAt: now, closedBy: "owner" }
             : (Object.fromEntries(
                 Object.entries(member.before ?? {})
                   .filter(([field]) => (SNAPSHOT_FIELDS as readonly string[]).includes(field))
                   .map(([field, value]) => [field, restoreValue(field as SnapshotField, value)]),
               ) as TaskChanges);
+        // Events written before closedBy existed can still restore the original closure actor.
+        if (changes.status && changes.status !== "open" && !("closedBy" in changes)) {
+          const closedAt = changes.closedAt ?? row.closedAt;
+          const [closure] = await db.select({ actor: taskEvents.actor }).from(taskEvents).where(and(
+            eq(taskEvents.taskId, row.id),
+            inArray(taskEvents.type, ["completed", "cancelled"]),
+            isNull(taskEvents.undoneAt),
+            sql`${taskEvents.after}->>'status' = ${changes.status}`,
+            sql`(${taskEvents.after}->>'closedAt')::timestamptz = ${closedAt?.toISOString() ?? null}::timestamptz`,
+          )).orderBy(desc(taskEvents.createdAt), desc(taskEvents.id)).limit(1);
+          changes.closedBy = closure?.actor ?? null;
+        }
         await this.mutate(db, row, changes, "undone", {
           actor: "owner",
           groupId: undoGroup,

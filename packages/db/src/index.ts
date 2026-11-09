@@ -33,9 +33,10 @@ export * from "./repos/provider-settings.js";
 export * from "./repos/push.js";
 export * from "./repos/settings.js";
 export * from "./repos/source-events.js";
-export * from "./repos/task-calibration.js";
+export * from "./repos/task-labels.js";
 export * from "./repos/sync.js";
 export * from "./repos/tasks.js";
+export * from "./repos/task-links.js";
 export * from "./repos/wipe.js";
 
 export * from "./services/intake.js";

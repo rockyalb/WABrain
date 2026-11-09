@@ -73,7 +73,7 @@ describe("Web Push sender", () => {
     expect(toPhone.headers["content-encoding"]).toBe("aes128gcm");
     expect(toPhone.headers.urgency).toBe("high");
     expect(String(toPhone.headers.authorization)).toMatch(new RegExp(`^vapid t=[\\w-]+\\.[\\w-]+\\.[\\w-]+, k=${vapid.publicKey}$`));
-    expect(toPhone.body.toString("utf8")).not.toContain("kontraten");
+    expect(toPhone.body.toString("utf8")).not.toContain("contract");
     expect(JSON.parse(phone.decrypt(toPhone.body))).toEqual({ type: "review", reviewItemId: "r1", reviewType: "create", title: "Send the contract" });
     expect(() => tablet.decrypt(toPhone.body)).toThrow();
 

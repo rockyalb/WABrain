@@ -37,7 +37,6 @@ export async function wipeAllData(database: Database): Promise<WipeResult> {
       .from(chats)
       .where(eq(chats.mode, "off"));
     await db.execute(sql`truncate table ${WIPED_TABLES} cascade`);
-    await db.execute(sql`delete from app_state where key = 'task.calibration'`);
     await db.execute(sql`select pg_advisory_xact_lock_shared(${SYNC_LOCK})`);
     // Re-created after the truncate: every other chat field takes its default.
     if (offChats.length) await db.insert(chats).values(offChats.map((chat) => ({ ...chat, mode: "off" as const })));

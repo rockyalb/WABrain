@@ -2,14 +2,15 @@ import type { JSX } from "preact";
 import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import { ApiError } from "../api";
 import { Icon } from "../components/mobile";
-import type { CreateTaskAction } from "@wabrain/contracts";
+import type { CreateTaskAction, TaskSort } from "@wabrain/contracts";
 import { Combobox } from "./Combobox";
 import { ContextBadge, Dialog, EmptyState, useWorkspace, WorkspaceHeader } from "./Workspace";
-import type { NewTask, TaskPatch } from "./api";
-import { closedRecently, contextName, dateKey, displayDate, displayTime, effectiveContext, reviewLabel, reviewTitle, taskActivityToday, timeKey, todayKey, zonedDateTime } from "./model";
+import type { LinkInput, NewTask, TaskPatch } from "./api";
+import { chatLabel, closedRecently, contextName, dateKey, displayDate, displayTime, effectiveContext, linkLabel, reviewLabel, reviewTitle, taskActivityToday, timeKey, todayKey, zonedDateTime } from "./model";
 import { jidPhone } from "./model";
-import type { MessageView, ReviewItem, Task, TaskDetail as Detail } from "./model";
+import type { MessageView, ReviewItem, Task, TaskDetail as Detail, TaskLink } from "./model";
 import { reviewTargetFromHash } from "./review-target";
+import { savedTaskSort, sortTasks, TASK_SORT_KEY, TASK_SORT_OPTIONS } from "./task-sort";
 
 type TaskTab = "today" | "upcoming" | "waiting" | "review" | "closed";
 type ReviewTargetState = "loading" | "pending" | "accepted" | "rejected" | "missing" | "unavailable";
@@ -21,6 +22,10 @@ const TABS: Array<{ id: TaskTab; label: string }> = [
 export function TasksView(props: { hash: string }) {
   const { data, api, run, runTask, runReview, pending, refresh } = useWorkspace();
   const [context, setContext] = useState<string>("all");
+  const [sort, setSort] = useState<TaskSort>(savedTaskSort);
+  useEffect(() => {
+    try { window.localStorage.setItem(TASK_SORT_KEY, sort); } catch { /* Sorting still works when storage is unavailable. */ }
+  }, [sort]);
   const [editor, setEditor] = useState<"new" | ReviewItem | null>(null);
   const [contact, setContact] = useState("");
   const [targetResult, setTargetResult] = useState<{ id: string; state: ReviewTargetState; taskId: string | null } | null>(null);
@@ -32,7 +37,7 @@ export function TasksView(props: { hash: string }) {
   const reviewTarget = tab === "review" ? reviewTargetFromHash(props.hash) : null;
   const targetVisible = reviewTarget ? data.reviewItems.some((item) => item.id === reviewTarget) : false;
   // Searching by contact reaches closed tasks older than the synced week; opening a task and coming back reloads it.
-  const closedSearch = useClosedSearch(tab === "closed" ? contact : "", detailId);
+  const closedSearch = useClosedSearch(tab === "closed" ? contact : "", detailId, sort);
   const contactOptions = useMemo(() => [...data.people]
     .sort((a, b) => a.displayName.localeCompare(b.displayName))
     .map((person) => ({ value: person.id, label: person.displayName, detail: person.jids.map(jidPhone).find(Boolean) ?? undefined })), [data.people]);
@@ -59,7 +64,7 @@ export function TasksView(props: { hash: string }) {
   const currentDate = todayKey(data.settings);
   const contextMatches = (task: Task) => context === "all" || effectiveContext(task, data) === context;
   const searching = tab === "closed" && contact !== "";
-  const tasks = (searching ? closedSearch.tasks : data.tasks).filter((task) => {
+  const tasks = sortTasks((searching ? closedSearch.tasks : data.tasks).filter((task) => {
     if (!contextMatches(task)) return false;
     if (tab === "closed") return searching || (task.status !== "open" && closedRecently(task, data.settings));
     if (task.status !== "open") return false;
@@ -67,7 +72,7 @@ export function TasksView(props: { hash: string }) {
     if (task.kind !== "todo") return false;
     const due = dateKey(task.dueAt, data.settings);
     return tab === "today" ? due !== null && due <= currentDate : due === null || due > currentDate;
-  }).sort(tab === "closed" ? (a, b) => (b.closedAt ?? b.updatedAt).localeCompare(a.closedAt ?? a.updatedAt) : (a, b) => (a.dueAt ?? "9999").localeCompare(b.dueAt ?? "9999"));
+  }), sort, tab === "closed");
   const review = data.reviewItems.filter((item) => {
     if (item.id === reviewTarget) return true;
     if (context === "all") return true;
@@ -94,9 +99,12 @@ export function TasksView(props: { hash: string }) {
       <nav class="ws-tabs" aria-label="Task views">{TABS.map((item) => <a key={item.id} href={`#/tasks/${item.id}`} class={tab === item.id ? "active" : ""}>
         {item.label}{item.id === "review" && data.reviewItems.length ? <b>{data.reviewItems.length}</b> : null}
       </a>)}</nav>
-      <label class="ws-filter desktop-only">Context <select value={context} onChange={(event) => setContext(event.currentTarget.value)}>
+      <div class="ws-task-filters"><label class="ws-filter desktop-only">Context <select value={context} onChange={(event) => setContext(event.currentTarget.value)}>
         <option value="all">All contexts</option>{data.contexts.map((item) => <option value={item.id} key={item.id}>{item.name}</option>)}
       </select></label>
+      {tab !== "review" ? <label class="ws-filter ws-task-sort">Sort by <select value={sort} onChange={(event) => setSort(event.currentTarget.value as TaskSort)}>
+        {TASK_SORT_OPTIONS.map((option) => <option key={option.value} value={option.value}>{option.label}</option>)}
+      </select></label> : null}</div>
     </div>
     {tab !== "review" ? <div class="m-chips mobile-only" role="group" aria-label="Context">
       <button type="button" class={context === "all" ? "active" : ""} aria-pressed={context === "all"} onClick={() => setContext("all")}>All</button>
@@ -105,7 +113,7 @@ export function TasksView(props: { hash: string }) {
     </div> : null}
     {tab === "closed" ? <div class="ws-closed-filter">
       <Combobox label="Contact" value={contact} options={contactOptions} onChange={setContact} emptyLabel="Today & yesterday" placeholder="Type a name or number" />
-      <p class="ws-muted">{searching ? "Every closed task for this contact, newest first." : "Showing tasks closed today and yesterday. Pick a contact to search all closed tasks."}</p>
+      <p class="ws-muted">{searching ? "Every closed task for this contact, in your selected order." : "Showing tasks closed today and yesterday. Pick a contact to search all closed tasks."}</p>
     </div> : null}
     {tab === "review" && reviewTarget && !targetVisible && targetResult?.id === reviewTarget ? <ReviewTargetNotice state={targetResult.state} taskId={targetResult.taskId} onRetry={() => setTargetAttempt((value) => value + 1)} /> : null}
     {tab === "review" ? (review.length ? <div class="ws-card-list">{review.map((item) => {
@@ -136,27 +144,31 @@ function ReviewTargetNotice(props: { state: ReviewTargetState; taskId: string | 
     {props.state === "pending" || props.state === "unavailable" ? <button type="button" class="ws-button subtle" onClick={props.onRetry}>Try again</button> : null}</span></div>;
 }
 
-/** Closed tasks for one contact, newest closed first, fetched from the server so they reach past the synced week. */
-function useClosedSearch(personId: string, refetchKey: string | null) {
+/** Closed tasks for one contact in the selected order, reaching past the synced week. */
+function useClosedSearch(personId: string, refetchKey: string | null, sort: TaskSort) {
   const { api } = useWorkspace();
-  const [state, setState] = useState<{ personId: string; tasks: Task[]; next: string | null; loading: boolean; error: string | null }>({ personId: "", tasks: [], next: null, loading: false, error: null });
-  const current = useRef(personId);
-  current.current = personId;
+  const [state, setState] = useState<{ key: string; tasks: Task[]; next: string | null; loading: boolean; error: string | null }>({ key: "", tasks: [], next: null, loading: false, error: null });
+  const key = JSON.stringify([personId, sort, refetchKey]);
+  const current = useRef(key);
+  const request = useRef(0);
+  current.current = key;
+  useEffect(() => () => { request.current += 1; }, []);
   const load = async (target: string, cursor: string | null) => {
-    setState((prev) => ({ ...prev, personId: target, loading: true, error: null, ...(cursor ? {} : { tasks: [], next: null }) }));
+    const attempt = ++request.current;
+    setState((prev) => ({ ...prev, key, loading: true, error: null, ...(cursor ? {} : { tasks: [], next: null }) }));
     try {
-      const page = await api.closedTasks(target, cursor);
-      if (current.current !== target) return;
-      setState((prev) => ({ personId: target, tasks: cursor ? [...prev.tasks, ...page.items] : page.items, next: page.nextCursor, loading: false, error: null }));
+      const page = await api.closedTasks(target, cursor, sort);
+      if (current.current !== key || request.current !== attempt) return;
+      setState((prev) => ({ key, tasks: cursor ? [...prev.tasks, ...page.items.filter((item) => !prev.tasks.some((task) => task.id === item.id))] : page.items, next: page.nextCursor, loading: false, error: null }));
     } catch {
-      if (current.current === target) setState((prev) => ({ ...prev, loading: false, error: "Closed tasks could not be loaded." }));
+      if (current.current === key && request.current === attempt) setState((prev) => ({ ...prev, loading: false, error: "Closed tasks could not be loaded." }));
     }
   };
   useEffect(() => {
     if (personId && !refetchKey) void load(personId, null);
-  }, [personId, refetchKey]);
-  const fresh = state.personId === personId;
-  return { tasks: fresh ? state.tasks : [], next: fresh ? state.next : null, loading: !fresh || state.loading, error: fresh ? state.error : null, more: () => (state.next ? load(personId, state.next) : Promise.resolve()) };
+  }, [personId, refetchKey, sort]);
+  const fresh = state.key === key;
+  return { tasks: fresh ? state.tasks : [], next: fresh ? state.next : null, loading: !fresh || state.loading, error: fresh ? state.error : null, more: () => (fresh && !state.loading && state.next ? load(personId, state.next) : Promise.resolve()) };
 }
 
 /** Completed-today vs created-today ring, as in the Android Tasks header. */
@@ -230,6 +242,8 @@ function TaskRow(props: { task: Task; onComplete: () => Promise<boolean>; disabl
   const contextId = effectiveContext(props.task, data);
   const context = data.contexts.find((item) => item.id === contextId);
   const linked = data.chats.find((chat) => chat.id === props.task.chatId)?.name ?? data.people.find((person) => person.id === props.task.personId)?.displayName;
+  const links = linkLabel(props.task.links, data);
+  const unconfirmed = props.task.links?.some((link) => !link.chatId);
   const checked = closing || props.task.status !== "open";
   const href = `#/tasks/${encodeURIComponent(props.task.id)}`;
   // The whole card opens the task; the check, links and selected text keep their own behaviour.
@@ -245,10 +259,15 @@ function TaskRow(props: { task: Task; onComplete: () => Promise<boolean>; disabl
     </button>
     <div class="ws-task-content"><a class="ws-task-title" href={href}>{props.task.title}</a>
       {props.task.description ? <p>{props.task.description}</p> : null}
-      <div class="ws-task-meta"><span class={props.task.dueAt && new Date(props.task.dueAt) < new Date() && props.task.status === "open" ? "overdue" : ""}>{props.task.dueAt ? (props.task.dueHasTime ? displayTime(props.task.dueAt, data.settings) : displayDate(props.task.dueAt, data.settings)) : "No due date"}</span>
+      <div class="ws-task-meta"><span class={`ws-due-date ${props.task.dueAt && new Date(props.task.dueAt) < new Date() && props.task.status === "open" ? "overdue" : ""}`}>{props.task.dueAt ? (props.task.dueHasTime ? displayTime(props.task.dueAt, data.settings) : displayDate(props.task.dueAt, data.settings)) : "No due date"}
+          {props.task.status === "open" && props.task.createdBy === "ai" ? <span class="ws-ai-mark" role="img" aria-label="Created by AI" title="Created by AI"><Icon name="sparkle" size={15} /></span> : null}
+        </span>
         {context ? <ContextBadge name={context.name} color={context.color} /> : null}
-        {linked ? <span>↗ {linked}</span> : null}{props.task.kind === "waiting_on" ? <span>Waiting on</span> : null}
-        {props.task.status !== "open" ? <span>{props.task.status === "done" ? "Done" : "Cancelled"} {displayDate(props.task.closedAt ?? props.task.updatedAt, data.settings)}</span> : null}
+        {linked ? <span>↗ {linked}</span> : null}
+        {links ? <span class={unconfirmed ? "ws-link-unconfirmed" : ""} title={unconfirmed ? "Open the task to say who this is" : "These chats can also close this task"}>{links}</span> : null}{props.task.kind === "waiting_on" ? <span>Waiting on</span> : null}
+        {props.task.status !== "open" ? <span class="ws-closed-date">{props.task.status === "done" ? "Done" : "Cancelled"} {displayDate(props.task.closedAt ?? props.task.updatedAt, data.settings)}
+          {props.task.closedBy === "ai" ? <span class="ws-ai-mark" role="img" aria-label="Closed by AI" title="Closed by AI"><Icon name="sparkle" size={15} /></span> : null}
+        </span> : null}
       </div>
     </div><a class="ws-row-arrow desktop-only" href={href} aria-label={`Open ${props.task.title}`}>↗</a>
   </article>;
@@ -268,15 +287,21 @@ function ReviewCard(props: { item: ReviewItem; targeted: boolean; onAccept: () =
   const chat = data.chats.find((candidate) => candidate.id === props.item.chatId);
   const person = data.people.find((candidate) => candidate.id === props.item.personId);
   const confirmation = props.item.type === "possibly_done" || props.item.type === "possibly_cancelled";
+  // "Confirm contact": the contacts a task created on its own was linked to (already active).
+  const linkAction = props.item.action.type === "link" ? props.item.action : null;
+  const linkedTask = linkAction ? data.tasks.find((candidate) => candidate.id === linkAction.taskId) : undefined;
+  const links = linkAction ? linkLabel(linkedTask?.links ?? linkAction.links, data) : props.item.action.type === "create" ? linkLabel(props.item.action.links, data) : null;
   const firstEvidence = props.item.action.evidenceMessageIds[0];
   // A later message suggests this proposal was already dealt with before it was reviewed.
   const handled = props.item.type === "create" ? props.item.handled : null;
   const handledEvidence = handled?.evidenceMessageIds[0];
   return <article ref={card} tabIndex={props.targeted ? -1 : undefined} class={`ws-review-card ${props.targeted ? "targeted" : ""}`}>
     <div class="ws-review-top"><span class="ws-review-kind">{reviewLabel(props.item)}</span><span class="ws-muted">{displayDate(props.item.createdAt)}</span></div>
-    <h2>{reviewTitle(props.item)}</h2>
-    {props.item.summary && props.item.summary !== reviewTitle(props.item) ? <p>{props.item.summary}</p> : null}
+    <h2>{linkAction ? linkedTask?.title ?? props.item.summary : reviewTitle(props.item)}</h2>
+    {linkAction ? <p>Messages in these chats can mark the task done. Open the task to add or pick contacts.</p>
+      : props.item.summary && props.item.summary !== reviewTitle(props.item) ? <p>{props.item.summary}</p> : null}
     <div class="ws-task-meta">{chat ? <span>{chat.name ?? "Chat"}</span> : null}{person ? <span>{person.displayName}</span> : null}
+      {links ? <span>{links}</span> : null}
       {props.item.taskId ? <a href={`#/tasks/${encodeURIComponent(props.item.taskId)}`}>Open task</a> : null}
       {chat && firstEvidence ? <a href={`#/chats/${encodeURIComponent(chat.id)}?around=${encodeURIComponent(firstEvidence)}`}>View source</a> : null}
     </div>
@@ -288,6 +313,8 @@ function ReviewCard(props: { item: ReviewItem; targeted: boolean; onAccept: () =
     {handled ? <div class="ws-actions"><button class="ws-button primary" type="button" disabled={props.disabled} onClick={() => props.onClose(handled.status)}>{handled.status === "done" ? "Already done" : "No longer needed"}</button>
       <button class="ws-button" type="button" disabled={props.disabled} onClick={props.onAccept}>Keep as open task</button>
       <button class="ws-button subtle" type="button" disabled={props.disabled} onClick={props.onReject}>Reject</button></div>
+    : linkAction ? <div class="ws-actions"><button class="ws-button primary" type="button" disabled={props.disabled} onClick={props.onAccept}>Accept</button>
+      <button class="ws-button subtle" type="button" disabled={props.disabled} onClick={props.onReject}>Remove</button></div>
     : <div class="ws-actions"><button class="ws-button primary" type="button" disabled={props.disabled} onClick={props.onAccept}>{confirmation ? "Done" : "Accept"}</button>
       {props.item.action.type === "create" ? <button class="ws-button" type="button" disabled={props.disabled} onClick={props.onEdit}>Edit & accept</button> : null}
       <button class="ws-button subtle" type="button" disabled={props.disabled} onClick={props.onReject}>{confirmation ? "Not yet" : "Reject"}</button></div>}
@@ -321,13 +348,47 @@ function TaskDetailView(props: { id: string }) {
         <div><dt>Context</dt><dd>{context ? <ContextBadge name={context.name} color={context.color} /> : contextName(null, data.contexts)}</dd></div>
         <div><dt>Source</dt><dd>{task.origin === "manual" ? "Added by you" : task.origin === "ai" ? "From a conversation" : "History import"}</dd></div>
         {chat ? <div><dt>Chat</dt><dd><a href={`#/chats/${encodeURIComponent(chat.id)}`}>{chat.name ?? chat.jid}</a></dd></div> : null}
-        {person ? <div><dt>Person</dt><dd><a href={`#/people/${encodeURIComponent(person.id)}`}>{person.displayName}</a></dd></div> : null}</dl></section>
+        {person ? <div><dt>Person</dt><dd><a href={`#/people/${encodeURIComponent(person.id)}`}>{person.displayName}</a></dd></div> : null}</dl>
+      <TaskLinks task={task} disabled={busy} onSave={(links) => void change(() => api.updateTask(task.id, { links }))} /></section>
       <section class="ws-panel"><h2>Evidence</h2>{detail.evidence.length ? detail.evidence.map((message) => <Evidence key={message.id} message={message} />) : <p class="ws-muted">No linked messages.</p>}</section>
     </div>
     <section class="ws-panel ws-history"><h2>History</h2>{detail.events.length ? detail.events.map((event) => <div class="ws-history-row" key={event.id}><div><b>{event.type.replace("_", " ")}</b><span>{event.actor} · {displayTime(event.createdAt, data.settings)}</span></div>
       {event.undoableUntil && !event.undoneAt && new Date(event.undoableUntil) > new Date() ? <button type="button" class="ws-text-button" disabled={busy} onClick={() => void change(() => api.undo(event.id))}>Undo</button> : null}</div>) : <p class="ws-muted">No changes yet.</p>}</section>
     {editing ? <TaskEditor title="Edit task" initial={task} disabled={busy} onClose={() => setEditing(false)} onSave={(patch) => void change(() => api.updateTask(task.id, patch)).then((ok) => { if (ok) setEditing(false); })} /> : null}
   </>;
+}
+
+const linkInputs = (links: readonly TaskLink[]): LinkInput[] => links.map((link) => ({ name: link.name, chatId: link.chatId }));
+
+/**
+ * "Also closed from": the other chats this task involves, which may mark it done. A name that matched
+ * no single chat asks "Who is “Robin”?" with the suggested chats first; any link can be removed, and
+ * another chat linked by hand.
+ */
+function TaskLinks(props: { task: Task; disabled: boolean; onSave: (links: LinkInput[]) => void }) {
+  const { data } = useWorkspace();
+  const links = props.task.links ?? [];
+  // Chats that could close it: not its own chat, and not Off (Off chats are never read).
+  const linkable = data.chats.filter((chat) => chat.id !== props.task.chatId && chat.mode !== "off");
+  const option = (chatId: string) => ({ value: chatId, label: chatLabel(chatId, data) ?? chatId });
+  const free = linkable.filter((chat) => !links.some((link) => link.chatId === chat.id)).map((chat) => option(chat.id));
+  return <div class="ws-links"><h3>Also closed from</h3>
+    {links.length === 0 ? <p class="ws-muted">No other chats. Link one when another conversation can finish this task, like sending Jordan the list Casey asked for.</p> : null}
+    {links.map((link) => {
+      const remove = () => props.onSave(linkInputs(links.filter((other) => other !== link)));
+      if (link.chatId) {
+        return <div class="ws-link-row" key={link.chatId}><a href={`#/chats/${encodeURIComponent(link.chatId)}`}>→ {chatLabel(link.chatId, data) ?? link.name}</a>
+          <button type="button" class="ws-text-button" disabled={props.disabled} aria-label={`Remove link to ${chatLabel(link.chatId, data) ?? link.name}`} onClick={remove}>Remove</button></div>;
+      }
+      const suggested = link.candidates.filter((candidate) => linkable.some((chat) => chat.id === candidate.chatId)).map((candidate) => ({ ...option(candidate.chatId), detail: "Suggested" }));
+      const options = [...suggested, ...free.filter((item) => !suggested.some((s) => s.value === item.value))];
+      const pick = (chatId: string) => { if (chatId) props.onSave(links.map((other) => ({ name: other.name, chatId: other === link ? chatId : other.chatId }))); };
+      return <div class="ws-link-row unconfirmed" key={`name:${link.name}`}>
+        <Combobox label={`Who is “${link.name}”?`} value="" options={options} onChange={pick} emptyLabel="Choose a chat" placeholder="Search chats" />
+        <button type="button" class="ws-text-button" disabled={props.disabled} aria-label={`Remove “${link.name}”`} onClick={remove}>Remove</button></div>;
+    })}
+    {links.length < 5 && free.length ? <Combobox label="Add contact" value="" options={free} onChange={(chatId) => { if (chatId) props.onSave([...linkInputs(links), { chatId }]); }} emptyLabel="Choose a chat" placeholder="Search chats" /> : null}
+  </div>;
 }
 
 export function Evidence(props: { message: MessageView }) {

@@ -93,23 +93,6 @@ export interface SessionInfo {
   bootstrapTokenRequired: boolean;
 }
 
-/** Mirrors AutoCreateStatusSchema in packages/contracts. */
-export interface AutoCreateStatus {
-  state: "trial" | "calibrating" | "active";
-  profile: { provider: string; model: string; promptVersion: string } | null;
-  calibration: {
-    ready: boolean;
-    reason: "insufficient_labels" | "no_reliable_threshold" | null;
-    threshold: number | null;
-    effectiveThreshold: number | null;
-    decisions: number;
-    accepted: number;
-    rejected: number;
-    calibratedAt: string | null;
-  };
-  required: { decisions: number; accepted: number; rejected: number; uneditedAcceptedAtThreshold: number; precision: number };
-}
-
 export interface SetupStatus {
   database: { ok: boolean };
   worker: { ok: boolean; lastSeenAt: string | null };
@@ -117,9 +100,8 @@ export interface SetupStatus {
   openwa: { configured: boolean; status?: string | null; ok?: boolean };
   providers: { configured: string[] } & Record<string, unknown>;
   trial: { active: boolean; startedAt: string; endsAt: string; days: number };
-  /** Why creates are (not) automatic; older servers omit it. */
-  autoCreate?: AutoCreateStatus;
   devices: { count: number };
+  /** Older servers omit it. */
   policy?: { trialDays: number; autoCreateThreshold: number };
   spending?: Record<string, unknown> | null;
   [extra: string]: unknown;

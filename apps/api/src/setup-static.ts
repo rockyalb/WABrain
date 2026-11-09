@@ -10,6 +10,8 @@ export const SETUP_PAGE_CSP = {
   scriptSrc: ["'self'"],
   styleSrc: ["'self'"],
   imgSrc: ["'self'", "data:"],
+  fontSrc: ["'self'"],
+  manifestSrc: ["'self'"],
   connectSrc: ["'self'"],
   baseUri: ["'none'"],
   formAction: ["'self'"],

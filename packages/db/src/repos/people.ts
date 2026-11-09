@@ -60,13 +60,15 @@ export async function getPerson(db: Db, id: string): Promise<Person> {
 export async function updatePerson(
   db: Db,
   id: string,
-  patch: { displayName?: string; defaultContextId?: string | null },
+  patch: { displayName?: string; defaultContextId?: string | null; contextConfirmed?: boolean },
 ): Promise<Person> {
   const [row] = await db
     .update(people)
     .set({
       ...patch,
       ...(patch.displayName !== undefined ? { displayNameSource: "owner" as const } : {}),
+      // The owner choosing a context confirms it.
+      ...(patch.defaultContextId !== undefined ? { contextConfirmed: patch.contextConfirmed ?? true } : {}),
       updatedAt: sql`now()`,
     })
     .where(eq(people.id, id))

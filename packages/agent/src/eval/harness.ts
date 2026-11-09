@@ -47,6 +47,7 @@ export function buildCaseMemory(evalCase: EvalCase): WorkingMemory {
     preceding: (evalCase.context ?? []).map((message) => toInput(message, date)),
     openTasks: (evalCase.openTasks ?? []).map(toTaskInput),
     pendingTasks: (evalCase.pendingTasks ?? []).map(toTaskInput),
+    linkedTasks: (evalCase.linkedTasks ?? []).map((task) => ({ ...toTaskInput(task), fromChat: task.fromChat, pending: task.pending ?? false })),
   });
 }
 
@@ -83,7 +84,7 @@ export interface LabeledCreateEvaluation {
 }
 
 /**
- * One owner Review decision on a create, as stored for calibration (packages/db `listTaskCalibrationLabels`),
+ * One owner Review decision on a create, as stored for evaluation (packages/db `listTaskCreateLabels`),
  * reduced to what a replay needs. The source messages rebuild the working memory for a candidate
  * model or prompt; this helper then judges the replay's output.
  */
@@ -146,7 +147,7 @@ export interface CaseScore {
   problems: string[];
 }
 
-const zero = (): Record<ActionType, number> => ({ create: 0, complete: 0, cancel: 0, reschedule: 0, merge: 0 });
+const zero = (): Record<ActionType, number> => ({ create: 0, complete: 0, cancel: 0, reschedule: 0, merge: 0, link: 0 });
 
 function matches(expected: ExpectedAction, actual: TaskAction): boolean {
   if (expected.type !== actual.type) return false;
@@ -179,7 +180,10 @@ function dueMatches(expected: ExpectedAction, actual: TaskAction): boolean | nul
   return null;
 }
 
-export function scoreCase(evalCase: EvalCase, actions: readonly TaskAction[]): CaseScore {
+const fold = (value: string) => value.normalize("NFD").replace(/\p{M}+/gu, "").toLowerCase();
+
+/** `involves` is parallel to `actions` (analyzeChat's result); omitted, involves is not checked. */
+export function scoreCase(evalCase: EvalCase, actions: readonly TaskAction[], involves?: readonly string[][]): CaseScore {
   const score: CaseScore = {
     caseId: evalCase.id,
     truePositives: zero(),
@@ -190,16 +194,22 @@ export function scoreCase(evalCase: EvalCase, actions: readonly TaskAction[]): C
     noActionCorrect: evalCase.expected.length === 0 ? actions.length === 0 : null,
     problems: [],
   };
-  const unmatched = [...actions];
+  const unmatched = actions.map((action, index) => ({ action, involves: involves?.[index] ?? null }));
   for (const expected of evalCase.expected) {
-    const index = unmatched.findIndex((actual) => matches(expected, actual));
+    const index = unmatched.findIndex((actual) => matches(expected, actual.action));
     if (index === -1) {
       score.falseNegatives[expected.type] += 1;
       score.problems.push(`missed ${expected.type}${"taskId" in expected ? ` ${expected.taskId}` : ""}`);
       continue;
     }
-    const [actual] = unmatched.splice(index, 1);
+    const [{ action: actual, involves: names }] = unmatched.splice(index, 1) as [{ action: TaskAction; involves: string[] | null }];
     score.truePositives[expected.type] += 1;
+    if (expected.type === "create" && expected.involves !== undefined && names !== null) {
+      const returned = names.map(fold);
+      const missing = expected.involves.filter((name) => !returned.some((value) => value.includes(fold(name))));
+      if (missing.length > 0) score.problems.push(`involves: missing ${missing.join(", ")} in [${names.join(", ")}]`);
+      if (expected.involves.length === 0 && names.length > 0) score.problems.push(`involves: expected none, got [${names.join(", ")}]`);
+    }
     const due = dueMatches(expected, actual!);
     if (due !== null) {
       score.dueChecked += 1;
@@ -214,7 +224,7 @@ export function scoreCase(evalCase: EvalCase, actions: readonly TaskAction[]): C
       if (handled !== expected.handled) score.problems.push(`handled: expected ${expected.handled}, got ${handled}`);
     }
   }
-  for (const extra of unmatched) {
+  for (const { action: extra } of unmatched) {
     score.falsePositives[extra.type] += 1;
     score.problems.push(`unexpected ${extra.type}${"taskId" in extra ? ` ${extra.taskId}` : ""}`);
   }

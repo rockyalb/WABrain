@@ -58,14 +58,14 @@ const textModel = scriptedJsonModel(({ text }) => {
     if (lower.includes("contract")) {
       actions.push({
         type: "create", kind: "todo", title: "Send the contract", description: "Sam asks for the contract.", language: "en",
-        due: { date: prompt.calendar.tomorrow, time: null }, taskId: null, taskIds: null, contextId: null, contextReason: null, handled: null,
+        due: { date: prompt.calendar.tomorrow, time: null }, taskId: null, taskIds: null, contextId: null, contextReason: null, handled: null, involves: null,
         confidence: 0.95, ambiguityReasons: [], evidenceMessageIds: [message.id],
       });
     }
     if ((lower.includes("sent") || lower.includes("done")) && prompt.openTasks[0]) {
       actions.push({
         type: "complete", kind: null, title: null, description: null, language: null, due: null,
-        taskId: prompt.openTasks[0].id, taskIds: null, contextId: null, contextReason: null, handled: null,
+        taskId: prompt.openTasks[0].id, taskIds: null, contextId: null, contextReason: null, handled: null, involves: null,
         confidence: 0.95, ambiguityReasons: [], evidenceMessageIds: [message.id],
       });
     }
@@ -169,6 +169,9 @@ describe("pipeline and push, end to end", () => {
   });
 
   it("(1) turns a signed webhook into a Review item during the trial, due tomorrow 17:00 in the default timezone (UTC)", async () => {
+    // New installs start without a trial; give this one a week.
+    const trial = await request("/setup/policy", { method: "PATCH", headers: { cookie }, json: { trialDays: 7 } });
+    expect(trial.status).toBe(200);
     const response = await deliver(makeOpenWaEnvelope({ data: { chatId: CONTACT, from: CONTACT, body: "send me the contract tomorrow", contact: { name: "Sam" } } }));
     expect(response.status).toBe(202);
 

@@ -97,6 +97,7 @@ export function toPerson(row: PersonRow, facts: PersonFactRow[]): Person {
     jids: row.jids,
     languages: row.languages,
     defaultContextId: row.defaultContextId,
+    contextConfirmed: row.contextConfirmed,
     facts: facts.map(toPersonFact),
     updatedAt: iso(row.updatedAt),
   };
@@ -114,6 +115,7 @@ export function toTask(row: TaskRow): Task {
     contextId: row.contextId,
     chatId: row.chatId,
     personId: row.personId,
+    links: row.links ?? [],
     origin: row.origin,
     language: row.language,
     confidence: row.confidence,
@@ -121,6 +123,8 @@ export function toTask(row: TaskRow): Task {
     createdAt: iso(row.createdAt),
     updatedAt: iso(row.updatedAt),
     closedAt: isoOrNull(row.closedAt),
+    closedBy: row.closedBy,
+    createdBy: row.createdBy,
   };
 }
 

@@ -33,6 +33,8 @@ export {
   fromNormalizedMessage,
   promptJson,
   type DerivedKind,
+  type LinkedTaskInput,
+  type MemoryLinkedTask,
   type MemoryMessage,
   type MemoryMessageInput,
   type MemoryTask,
@@ -48,7 +50,7 @@ export { analyzeChat, type AnalyzeChatResult } from "./analysis/analyze.js";
 export {
   PROFILE_PROMPT_VERSION,
   extractPersonFacts,
-  suggestChatContext,
+  suggestPersonContext,
   type ContextSuggestion,
   type ExtractPersonFactsResult,
   type ProfileMessageInput,

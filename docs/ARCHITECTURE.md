@@ -145,9 +145,9 @@ evidence (the owner's messages or someone else's).
 
 - `create`: applied automatically when auto-create is enabled for the chat,
   confidence is at or above the threshold, and there is no ambiguity.
-  Otherwise it goes to Review. During the trial period, every create goes to
-  Review. Auto-create also requires usable owner-decision calibration for the
-  active provider/model/prompt profile; elapsed time alone never activates it.
+  Otherwise it goes to Review. During the trial period (none by default),
+  every create goes to Review. The owner's Review decisions do not gate
+  anything; they are kept as labels for evaluating models and prompts.
 - `complete`, `cancel`, `reschedule`: applied automatically only when the
   evidence is the owner's own message, exactly one task is referenced, and
   confidence meets the automatic-change threshold without ambiguity.
@@ -157,15 +157,43 @@ evidence (the owner's messages or someone else's).
   apply. `complete`/`cancel` stamp the pending item with a "may already be
   handled" hint (quoting the message); `reschedule` moves its proposed due.
   The card then offers accept as done/cancelled (the task is kept, closed, and
-  the create counts as accepted for calibration), keep as open task, or reject.
+  the create counts as accepted in the evaluation set), keep as open task, or
+  reject. The item's notification is replaced by one offering "Save as done"
+  and Discard.
   If the owner accepted the create in the meantime, the change becomes an
   ordinary Review prompt on the new task; if they rejected it, it is dropped.
 - A `create` whose own burst already shows it handled (a request and, a few
   messages later, "here you go" or the delivery itself; or "never mind") carries
-  `alreadyHandled` and always goes to Review (`already_handled`), stamped with
-  the same hint and the same choices. Whether the "done" lands in the same
-  burst or a later one, the owner sees the same card.
+  `alreadyHandled`. It passes the same gates as any create; when it would be
+  applied, it is saved straight into Done or Cancelled (`already_handled`) and
+  the owner gets an informational "Saved as done" notification. Otherwise it
+  goes to Review stamped with the same hint and the same choices as above.
 - `merge`: always Review.
+- Linked chats (task links): a create names who else the task involves
+  (`involves`, as written: "Send Jordan the list" → "Jordan"). Code matches
+  each name to one of the owner's chats (saved contact, person and chat names;
+  case and diacritics folded, a possessive "'s" ignored; one
+  typo in names of five or more letters). Exactly one exact match, or several
+  with only one talked to within a year, is a confirmed link; otherwise the
+  task carries an unconfirmed link and the owner picks the chat ("Who is
+  “Robin”?", suggested chats first). A person's name links only their direct
+  chat; a group is linked when it is named ("the Design group") or picked. A typo
+  match is only ever suggested. The linked chat's analysis sees the task under
+  `linkedTasks` and may `complete` or `cancel` it under the normal rules (the
+  owner's own message auto-closes; anyone else's goes to Review), or mark a
+  linked create still pending in Review as handled; it never reschedules or
+  merges it. A "mentions only" group with an open linked task has its live
+  messages analyzed even without a mention, but those messages (`linked_only`)
+  may only close tasks linked to it: anything else they would cause is dropped.
+- A task the analysis creates on its own with links gets a "Confirm contact"
+  Review item (type `link`, reason `link_confirmation`). The links work at
+  once; the notification ("Task → Jordan") offers Accept (keep them) and Remove
+  (drop the links the analysis proposed; links the owner added stay), or, when
+  a name still needs a contact ("→ Robin?", `needsPick`), no Accept: tapping
+  opens Review to pick. Accepting with `edits.links` saves the owner's list
+  (contacts can be added: telling Anja "I let him know" can close it too).
+  Editing a task's links directly answers its pending confirmation. A create
+  still in Review gets no separate item: its card shows and edits the links.
 - Every applied action can be undone and is written to `task_events`.
 - Every Review item triggers a notification.
 
@@ -196,9 +224,11 @@ its source messages and a confidence. Facts are applied automatically and can be
 edited. A person's claims about themselves are stored as unverified until they
 are corroborated or the owner confirms them.
 
-The chat's default context is suggested from the profile and confirmed once by
-the owner. Tasks inherit it unless the model gives a specific reason to
-override it.
+The person's default context is suggested from the profile and confirmed once
+by the owner. Their direct chat shares it (a database trigger copies it onto the
+chat, so every reader of a chat's context sees the person's). Group chats have
+their own context, set by the owner. Tasks inherit the chat's context unless the
+model gives a specific reason to override it.
 
 ## Media
 
@@ -282,6 +312,5 @@ event expires. The Recently closed tab provides a route to task history and Undo
 Jobs use pg-boss with retry/backoff and dead-letter queues. Owners can inspect
 bounded, redacted failures at `/setup/jobs/failures`; an operator deliberately
 retries a selected job with the bundled `operations.js` command. See
-[OPERATIONS.md](OPERATIONS.md). Calibration labels retain the analysis profile
-and evidence needed for model/prompt evaluation; calibration is an operational
-gate, not a guarantee of statistical accuracy.
+[OPERATIONS.md](OPERATIONS.md). Review decisions are kept as labels with the
+analysis profile and evidence needed for model/prompt evaluation.

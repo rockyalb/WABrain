@@ -6,7 +6,6 @@ import {
   createPairingCode,
   deleteOwnerSession,
   findOwnerSession,
-  getAutoCreateStatus,
   getOwner,
   getSettings,
   historyImportCoverage,
@@ -182,10 +181,6 @@ export function setupRoutes(deps: AppDeps) {
       resolveProviderSettings(deps),
     ]);
     const now = deps.now();
-    const autoCreate = await getAutoCreateStatus(database.db, {
-      inTrial: isTrialActive(settings, now),
-      autoCreateThreshold: settings.autoCreateThreshold,
-    });
     return c.json({
       database: { ok: databaseOk },
       worker: {
@@ -200,7 +195,7 @@ export function setupRoutes(deps: AppDeps) {
         endsAt: trialEndsAt(settings).toISOString(),
         days: settings.trialDays,
       },
-      autoCreate,
+      policy: { trialDays: settings.trialDays, autoCreateThreshold: settings.autoCreateThreshold },
       devices: { count: devices },
     });
   });

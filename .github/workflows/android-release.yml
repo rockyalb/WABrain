@@ -3,6 +3,12 @@ name: Android release
 # Builds the signed release APK for a version tag (v1.0.0 must match versionName
 # in apps/android/app/build.gradle.kts) and attaches it to a GitHub release.
 #
+# Pushes to main that touch the Android app release on their own: when
+# versionName has no release yet, the workflow tags that commit v<versionName>
+# and builds it in the same run (a tag pushed with the workflow token does not
+# start another workflow). Android changes without a versionName bump are left
+# unreleased with a warning. Pushing a v* tag by hand still works.
+#
 # Repository secrets (Settings → Secrets and variables → Actions):
 #   WABRAIN_KEYSTORE_BASE64   the release keystore file, base64-encoded (base64 -w0 release.jks)
 #   WABRAIN_KEYSTORE_PASSWORD keystore password
@@ -14,20 +20,86 @@ name: Android release
 on:
   push:
     tags: ["v*"]
+    branches: [main]
+    # Path filters apply to the main pushes only; tag pushes always run.
+    paths:
+      - "apps/android/**"
+      - ".github/workflows/android-release.yml"
+  workflow_dispatch:
 
 permissions:
   contents: read
 
+# One group for tag and main runs, so a hand-pushed tag and the main push that
+# carries the same version never publish at once.
 concurrency:
-  group: android-release-${{ github.ref }}
+  group: android-release
   cancel-in-progress: false
 
 jobs:
+  version:
+    name: Resolve the release tag
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    outputs:
+      tag: ${{ steps.resolve.outputs.tag }}
+      release: ${{ steps.resolve.outputs.release }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag versionName unless it is already released
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' apps/android/app/build.gradle.kts)
+          if [ -z "$version" ]; then
+            echo "::error::No versionName in apps/android/app/build.gradle.kts."
+            exit 1
+          fi
+          tag="v$version"
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+
+          if [ "$GITHUB_REF_TYPE" = tag ]; then
+            if [ "$tag" != "$GITHUB_REF_NAME" ]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match versionName $version in apps/android/app/build.gradle.kts."
+              exit 1
+            fi
+            echo "release=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [ "$GITHUB_REF" != refs/heads/main ]; then
+            echo "::error::Releases are cut from main or a v* tag, not $GITHUB_REF."
+            exit 1
+          fi
+          # A release drafted by hand on GitHub has no APK until this workflow attaches one.
+          if gh release view "$tag" --json assets --jq '.assets[].name' 2> /dev/null | grep -qxF "wabrain-$tag.apk"; then
+            echo "::warning::$tag is already released; bump versionName in apps/android/app/build.gradle.kts to release these Android changes."
+            echo "release=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if git ls-remote --exit-code --tags origin "refs/tags/$tag" > /dev/null; then
+            echo "::notice::$tag exists without a release; building it."
+          else
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -a "$tag" "$GITHUB_SHA" -m "WABrain $tag"
+            git push origin "refs/tags/$tag"
+            echo "::notice::Tagged $GITHUB_SHA as $tag."
+          fi
+          echo "release=true" >> "$GITHUB_OUTPUT"
+
   node-checks:
+    needs: version
+    if: needs.version.outputs.release == 'true'
     uses: ./.github/workflows/node.yml
 
   release:
-    needs: node-checks
+    needs: [version, node-checks]
+    if: needs.version.outputs.release == 'true'
     name: Signed release APK
     runs-on: ubuntu-latest
     timeout-minutes: 45
@@ -39,10 +111,12 @@ jobs:
         working-directory: apps/android
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: refs/tags/${{ needs.version.outputs.tag }}
 
       - name: Tag matches versionName
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           version=$(sed -n 's/^[[:space:]]*versionName = "\(.*\)"/\1/p' app/build.gradle.kts)
           if [ "v$version" != "$TAG" ]; then
@@ -96,7 +170,7 @@ jobs:
 
       - name: Verify the signature
         env:
-          TAG: ${{ github.ref_name }}
+          TAG: ${{ needs.version.outputs.tag }}
         run: |
           apk=app/build/outputs/apk/release/app-release.apk
           apksigner=$(find "$ANDROID_HOME/build-tools" -mindepth 2 -maxdepth 2 -name apksigner | sort -V | tail -n 1)
@@ -113,5 +187,10 @@ jobs:
       - name: Publish the GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: gh release create "$TAG" "$APK" "$APK.sha256" --title "WABrain $TAG" --generate-notes --verify-tag
+          TAG: ${{ needs.version.outputs.tag }}
+        run: |
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            gh release upload "$TAG" "$APK" "$APK.sha256" --clobber
+          else
+            gh release create "$TAG" "$APK" "$APK.sha256" --title "WABrain $TAG" --generate-notes --verify-tag
+          fi

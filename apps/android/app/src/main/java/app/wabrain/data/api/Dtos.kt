@@ -91,7 +91,10 @@ data class PersonDto(
     val displayName: String,
     val jids: List<String> = emptyList(),
     val languages: List<String> = emptyList(),
+    /** Also the context of the person's direct chats, which share it. */
     val defaultContextId: String? = null,
+    /** False while the context is only a suggestion awaiting the owner's confirmation. */
+    val contextConfirmed: Boolean = true,
     val facts: List<PersonFactDto> = emptyList(),
     val updatedAt: String,
 )
@@ -125,6 +128,23 @@ enum class TaskStatus(val wire: String) {
     }
 }
 
+/** One of a link's possible chats, for the "Who is Robin?" dropdown. */
+@Serializable
+data class LinkCandidateDto(val chatId: String, val name: String = "")
+
+/**
+ * Another chat a task involves ("Send Jordan the list" → Jordan's chat), which may then close it.
+ * [chatId] null: the name matched no single chat, and the owner picks one ([candidates] first).
+ */
+@Serializable
+data class TaskLinkDto(
+    val name: String,
+    val chatId: String? = null,
+    val candidates: List<LinkCandidateDto> = emptyList(),
+    /** "ai" or "owner". */
+    val source: String = "ai",
+)
+
 @Serializable
 data class TaskDto(
     val id: String,
@@ -137,6 +157,8 @@ data class TaskDto(
     val contextId: String? = null,
     val chatId: String? = null,
     val personId: String? = null,
+    /** Other chats this task involves. */
+    val links: List<TaskLinkDto> = emptyList(),
     /** "ai", "manual" or "import". */
     val origin: String = "manual",
     val language: String? = null,
@@ -145,6 +167,10 @@ data class TaskDto(
     val createdAt: String,
     val updatedAt: String,
     val closedAt: String? = null,
+    /** "ai", "owner" or "system"; null for open tasks or unknown legacy closures. */
+    val closedBy: String? = null,
+    /** "ai" when the task was created without the owner accepting it; "owner" when added or accepted in Review. */
+    val createdBy: String? = null,
 )
 
 @Serializable
@@ -185,6 +211,7 @@ sealed class TaskActionDto {
         val dueHasTime: Boolean = false,
         val contextId: String? = null,
         val language: String? = null,
+        val links: List<TaskLinkDto> = emptyList(),
         override val confidence: Double = 0.0,
         override val ambiguityReasons: List<String> = emptyList(),
         override val evidenceMessageIds: List<String> = emptyList(),
@@ -219,6 +246,17 @@ sealed class TaskActionDto {
         override val evidenceMessageIds: List<String> = emptyList(),
     ) : TaskActionDto()
 
+    /** The contacts a task created automatically was linked to, for the owner to confirm. */
+    @Serializable
+    @SerialName("link")
+    data class Link(
+        val taskId: String,
+        val links: List<TaskLinkDto> = emptyList(),
+        override val confidence: Double = 0.0,
+        override val ambiguityReasons: List<String> = emptyList(),
+        override val evidenceMessageIds: List<String> = emptyList(),
+    ) : TaskActionDto()
+
     @Serializable
     @SerialName("merge")
     data class Merge(
@@ -240,6 +278,8 @@ enum class ReviewItemType(val wire: String) {
     @SerialName("possibly_cancelled") POSSIBLY_CANCELLED("possibly_cancelled"),
     @SerialName("reschedule") RESCHEDULE("reschedule"),
     @SerialName("merge") MERGE("merge"),
+    /** Confirm the contacts an automatically created task was linked to. */
+    @SerialName("link") LINK("link"),
 
     /** Fallback for values added to the contract after this build. */
     @SerialName("unknown") UNKNOWN("unknown"),

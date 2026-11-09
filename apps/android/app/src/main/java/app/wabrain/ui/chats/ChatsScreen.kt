@@ -23,6 +23,7 @@ import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
@@ -58,7 +59,7 @@ import app.wabrain.ui.common.errorText
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-fun ChatsScreen(container: AppContainer) {
+fun ChatsScreen(container: AppContainer, onOpenPerson: (String) -> Unit) {
     val vm: ChatsViewModel = viewModel {
         ChatsViewModel(container.db.chats().observeAll(), container.db.contexts().observeAll(), container.directory)
     }
@@ -92,7 +93,10 @@ fun ChatsScreen(container: AppContainer) {
 
     state.open?.let { open ->
         ModalBottomSheet(onDismissRequest = vm::close) {
-            ChatSettings(vm, open, state.contexts, state.busy, state.error)
+            ChatSettings(vm, open, state.contexts, state.busy, state.error, onOpenPerson = { personId ->
+                vm.close()
+                onOpenPerson(personId)
+            })
         }
     }
 
@@ -157,7 +161,14 @@ private fun ChatRow(chat: ChatEntity, contextName: String?, onClick: () -> Unit)
 }
 
 @Composable
-private fun ChatSettings(vm: ChatsViewModel, chat: ChatEntity, contexts: List<ContextEntity>, busy: Boolean, error: Throwable?) {
+private fun ChatSettings(
+    vm: ChatsViewModel,
+    chat: ChatEntity,
+    contexts: List<ContextEntity>,
+    busy: Boolean,
+    error: Throwable?,
+    onOpenPerson: (String) -> Unit,
+) {
     Column(
         Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 32.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp),
@@ -185,8 +196,9 @@ private fun ChatSettings(vm: ChatsViewModel, chat: ChatEntity, contexts: List<Co
         }
         Text(stringResource(modeExplanation(chat.chatMode)), style = MaterialTheme.typography.bodySmall)
 
-        // Default context
-        Text(stringResource(R.string.chat_default_context), style = MaterialTheme.typography.titleSmall)
+        // Context: a direct chat's is its person's, changed on their page; a group has its own.
+        val personId = chat.personId?.takeIf { !chat.isGroup }
+        Text(stringResource(if (personId != null) R.string.chat_context else R.string.chat_group_context), style = MaterialTheme.typography.titleSmall)
         if (ChatRules.needsContextConfirmation(chat)) {
             val name = contexts.firstOrNull { it.id == chat.defaultContextId }?.name ?: chat.defaultContextId.orEmpty()
             Card(colors = CardDefaults.cardColors(containerColor = MaterialTheme.colorScheme.secondaryContainer)) {
@@ -199,14 +211,23 @@ private fun ChatSettings(vm: ChatsViewModel, chat: ChatEntity, contexts: List<Co
                 }
             }
         }
-        Dropdown(
-            label = stringResource(if (ChatRules.needsContextConfirmation(chat)) R.string.chat_context_choose_other else R.string.chat_default_context),
-            options = contextOptions(contexts),
-            selected = chat.defaultContextId,
-            onSelect = { id -> vm.selectContext(chat.id, id) },
-            enabled = !busy,
-            modifier = Modifier.fillMaxWidth(),
-        )
+        if (personId != null) {
+            val who = chat.name ?: chat.jid
+            if (!ChatRules.needsContextConfirmation(chat)) {
+                Text(contexts.firstOrNull { it.id == chat.defaultContextId }?.name ?: stringResource(R.string.chat_context_none))
+            }
+            Text(stringResource(R.string.chat_context_from_person, who), style = MaterialTheme.typography.bodySmall)
+            TextButton(onClick = { onOpenPerson(personId) }) { Text(stringResource(R.string.chat_context_open_person, who)) }
+        } else {
+            Dropdown(
+                label = stringResource(if (ChatRules.needsContextConfirmation(chat)) R.string.chat_context_choose_other else R.string.chat_group_context),
+                options = contextOptions(contexts),
+                selected = chat.defaultContextId,
+                onSelect = { id -> vm.selectContext(chat.id, id) },
+                enabled = !busy,
+                modifier = Modifier.fillMaxWidth(),
+            )
+        }
 
         // Auto-create
         Row(verticalAlignment = Alignment.CenterVertically) {

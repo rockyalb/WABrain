@@ -24,6 +24,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -32,6 +33,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -68,12 +70,18 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlin.math.roundToInt
 import java.time.LocalTime
 import java.time.ZoneId
 import java.time.format.DateTimeFormatter
 
 private val HHMM = DateTimeFormatter.ofPattern("HH:mm")
 private val LEAD_OPTIONS = listOf(0, 5, 10, 15, 30, 60, 120, 1440)
+
+/** Same range as the setup page's slider: 50–99% in whole percents. */
+private const val THRESHOLD_MIN = 0.5f
+private const val THRESHOLD_MAX = 0.99f
+private const val THRESHOLD_STEPS = 48
 val CONTEXT_COLORS = listOf("#3B82F6", "#10B981", "#F59E0B", "#EF4444", "#8B5CF6", "#EC4899", "#6B7280")
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -242,12 +250,30 @@ fun SettingsScreen(container: AppContainer) {
                 }
             }
 
-            // ---------------------------------------------------------- trial (read-only)
+            // ---------------------------------------------------------- AI: threshold, trial (read-only)
             SectionHeader(stringResource(R.string.settings_ai))
+            // Dragging moves the label only; the server is patched once, when the thumb is released.
+            var threshold by remember(settings.autoCreateThreshold) {
+                mutableFloatStateOf(settings.autoCreateThreshold.toFloat().coerceIn(THRESHOLD_MIN, THRESHOLD_MAX))
+            }
+            Column(Modifier.padding(horizontal = 16.dp)) {
+                Text(stringResource(R.string.settings_threshold_label, (threshold * 100).roundToInt()), style = MaterialTheme.typography.bodyLarge)
+                Slider(
+                    value = threshold,
+                    onValueChange = { threshold = (it * 100).roundToInt() / 100f },
+                    onValueChangeFinished = {
+                        if ((threshold * 100).roundToInt() != (settings.autoCreateThreshold * 100).roundToInt()) {
+                            patch(buildJsonObject { put("autoCreateThreshold", (threshold * 100).roundToInt() / 100.0) })
+                        }
+                    },
+                    valueRange = THRESHOLD_MIN..THRESHOLD_MAX,
+                    steps = THRESHOLD_STEPS,
+                )
+                Text(stringResource(R.string.settings_threshold_hint), style = MaterialTheme.typography.bodySmall)
+            }
             settings.trialStartedAt?.let {
                 LabeledRow(stringResource(R.string.settings_trial), pluralStringResource(R.plurals.settings_trial_value, settings.trialDays, formatter.formatInstant(it), settings.trialDays))
             }
-            LabeledRow(stringResource(R.string.settings_threshold), String.format(java.util.Locale.ROOT, "%.2f", settings.autoCreateThreshold))
             Text(stringResource(R.string.settings_ai_hint), Modifier.padding(horizontal = 16.dp), style = MaterialTheme.typography.bodySmall)
 
             // ---------------------------------------------------------- about
