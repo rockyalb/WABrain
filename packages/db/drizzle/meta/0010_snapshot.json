@@ -2900,7 +2900,7 @@
           "type": "text",
           "primaryKey": false,
           "notNull": true,
-          "default": "'Europe/Tirane'"
+          "default": "'UTC'"
         },
         "end_of_work_day": {
           "name": "end_of_work_day",
